@@ -842,6 +842,11 @@ pub const Context = struct {
         const rh = target.height * ssy;
 
         var s = threed.Stream{ .buf = @alignCast(std.mem.bytesAsSlice(u32, self.pbuf.bytes)) };
+        // Shader heaps are retired and reallocated, so new code lands at a program address
+        // an earlier shader used. Without this the SMs run the old code out of the
+        // instruction cache for the warps that hit a stale line. The payload is
+        // INSTRUCTION | LOCKS | FLUSH_DATA | DATA | CONSTANT.
+        s.m1(gfx.INVALIDATE_SHADER_CACHES, 0x1017);
         // A block-linear color RT (every nvidia render-target image) uses the
         // block-linear begin so it can be paired with a ZETA depth surface. A
         // non-block-linear target (only legacy/linear cases) uses the linear begin.
