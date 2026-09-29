@@ -51,6 +51,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "drm", .module = drm_dep.module("drm") },
             .{ .name = "gbm", .module = gbm_dep.module("gbm") },
             .{ .name = "vulcan-ir", .module = vulcan_dep.module("vulcan-ir") },
+            .{ .name = "vulcan-gpu", .module = vulcan_dep.module("vulcan-gpu") },
             .{ .name = "vulcan-spirv", .module = vulcan_dep.module("vulcan-spirv") },
             .{ .name = "vulcan-target", .module = vulcan_dep.module("vulcan-target") },
             .{ .name = "vulcan-glsl", .module = vulcan_dep.module("vulcan-glsl") },

@@ -25,7 +25,7 @@ const compute = nvidia.compute;
 /// vulcan-target/nvidia/isel.zig (out-ptr lo/hi, then one word per arg).
 fn writeParams(cbuf: []u8, out_va: u64, args: []const i32) void {
     const words = std.mem.bytesAsSlice(u32, cbuf);
-    var w: usize = isel.param_base / 4; // param_base is 4-byte aligned
+    var w: usize = isel.nvidia_abi.param_base / 4; // param_base is 4-byte aligned
     words[w] = @truncate(out_va); // output ptr low
     words[w + 1] = @truncate(out_va >> 32); // output ptr high
     w += 2;
@@ -46,7 +46,7 @@ pub fn runIntBinaryKernel(dev: *NvDevice, spirv_code: []const u8, x: i32, y: i32
     // SPIR-V -> Vulcan IR -> SASS compute kernel.
     var func = try spirv.parseSpirv(gpa, spirv_code);
     defer func.deinit();
-    var kernel = try isel.compileKernel(gpa, &func);
+    var kernel = try isel.compileKernel(gpa, &func, isel.nvidia_abi);
     defer kernel.deinit(gpa);
 
     // GPU memory: the kernel code, the output word, and the parameter constant
@@ -68,7 +68,7 @@ pub fn runIntBinaryKernel(dev: *NvDevice, spirv_code: []const u8, x: i32, y: i32
     const args = [_]i32{ x, y };
     gpumem.zero(cbufm.bytes, cbufm.bytes.len);
     writeParams(cbufm.bytes, outm.va, &args);
-    const cbuf_size: u32 = isel.param_base + 0x10;
+    const cbuf_size: u32 = isel.nvidia_abi.param_base + 0x10;
 
     // Zero the output so the read-back is meaningful.
     const outp: *volatile i32 = @ptrCast(@alignCast(outm.bytes.ptr));

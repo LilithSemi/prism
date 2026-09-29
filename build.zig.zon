@@ -9,15 +9,15 @@
             .hash = "xml-0.2.0-ZTbP3yI6AgB9Rpd2hQrueO63ib0Bm6mQiL_WB1t7JAmP",
         },
         .wayland = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#7c46a90f066a4c65699c4ca9bd88fd1ae0f12e15",
-            .hash = "wayland-0.1.0-J5KKz46UBgCTceoOwMQXpoBy_Wl1BNvvy1Y2dv_Ay64J",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#33118796096c0bd14cfb971f20811fc763939dce",
+            .hash = "wayland-0.1.0-J5KKz6aUBgBCnQXAHtwGsiw0VoUmDP4uUkgJQAwb2ewR",
         },
         .asahi = .{
             .path = "subproject/asahi",
         },
         .vulcan = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan#8dbb53dca5e923ec497b00a802b25e762ed86369",
-            .hash = "vulcan-0.0.0-d6EfZEDfhAD7LsCcFmT2iQvBeXNm6hPtxPo96ZpF_bFR",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan.git#2344d6b704ea23b9063f3752e2ad5f774d8d83d6",
+            .hash = "vulcan-0.0.0-d6EfZDVmqQCcHIU66CrFzDI18a_bXfYSBs8Oj9GAU44q",
         },
         .drm = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/drm.zig#25adace9df06b8b859ee52cc0832bcc4c2223c3a",
@@ -28,8 +28,8 @@
             .hash = "gbm-0.1.0-B1lS4sajAAAcYVNDSp6zbOYClrq3RBQW5fNwnyu4tgB2",
         },
         .nvidia = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/nvidia.zig#55e802c62444eccf8f2919d4b13463e375ae88fe",
-            .hash = "nvidia-0.1.0-nX_09yBuCAAha5yRD62mzBoqRsuQ70hBECJYMieHCn9A",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/nvidia.zig#b6dcae75412bf7cbe0eea391597c7cda90a8e7c7",
+            .hash = "nvidia-0.1.0-nX_095UyCwCWFeTFvwrg4XK8O2S0lgZgjVSS64CtTgJZ",
         },
     },
     .paths = .{

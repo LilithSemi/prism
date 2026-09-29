@@ -7,6 +7,7 @@ const target = @import("vulcan-target");
 const spirv = @import("vulcan-spirv");
 const sampler = @import("sampler.zig");
 const ir = @import("vulcan-ir");
+const gpu = @import("vulcan-gpu");
 const front = @import("../../spirv.zig");
 
 /// The native (host-arch) JIT backend. `target.native` dispatches to
@@ -250,20 +251,8 @@ fn readBiComp(func: *const front.Function, value: ir.function.Value) u32 {
     return 0;
 }
 
-fn readBuiltinParam(func: *const front.Function, value: ir.function.Value) ?u32 {
-    var it = func.attributesOf(.{ .value = value });
-    while (it.next()) |attr| switch (attr) {
-        .custom => |c| {
-            if (std.mem.eql(u8, c.namespace, "vulcan.gpu") and std.mem.eql(u8, c.key, "builtin")) {
-                return switch (c.value) {
-                    .int => |v| @intCast(v),
-                    else => null,
-                };
-            }
-        },
-        else => {},
-    };
-    return null;
+fn readBuiltinParam(func: *const front.Function, value: ir.function.Value) ?gpu.Builtin {
+    return gpu.attrs.builtinOf(func, value);
 }
 
 /// Read a value's `vulcan.gpu.attr` slot tag (the input varying attribute slot vulcan
@@ -555,16 +544,16 @@ pub fn rewriteGraphics(func: *front.Function) !GfxInfo {
             // draw supplies, a fragment builtin (gl_FragCoord / gl_FrontFacing) the
             // rasterizer fills, or an ordinary scalar f32 varying input.
             else => if (readBuiltinParam(func, pv)) |bi| switch (bi) {
-                42, 43 => index_count += 1, // gl_VertexIndex / gl_InstanceIndex (i32)
-                15 => { // gl_FragCoord (a component of the fragment window position)
+                .vertex_index, .instance_index => index_count += 1, // the draw supplies these (i32)
+                .frag_coord => { // a component of the fragment window position
                     if (input_count < input_slots.len) input_slots[input_count] = FRAG_COORD_INPUT_BASE + readBiComp(func, pv);
                     input_count += 1;
                 },
-                16 => { // gl_PointCoord (s/t across a point sprite)
+                .point_coord => { // s/t across a point sprite
                     if (input_count < input_slots.len) input_slots[input_count] = POINT_COORD_INPUT_BASE + readBiComp(func, pv);
                     input_count += 1;
                 },
-                17 => { // gl_FrontFacing
+                .front_facing => {
                     if (input_count < input_slots.len) input_slots[input_count] = FRONT_FACING_INPUT;
                     input_count += 1;
                 },
@@ -595,7 +584,7 @@ pub fn rewriteGraphics(func: *front.Function) !GfxInfo {
     const writes_frag_depth = fsWritesFragDepth(func);
 
     // Append the output-buffer pointer parameter (GPR x0 at the ABI level).
-    const ptr_ty = try func.types.intern(.ptr);
+    const ptr_ty = try func.types.intern(.{ .ptr = .global });
     const outbuf = try func.appendBlockParam(entry, ptr_ty);
 
     // Rewrite every tagged output store in every block (not only the entry block): an
@@ -783,7 +772,7 @@ pub fn rewriteGraphicsQuad(func: *front.Function) !GfxInfo {
     try spirv.widenGraphics(func);
 
     // Re-point every tagged color-output store (now of a <4 x f32>) to qout + comp*16.
-    const ptr_ty = try func.types.intern(.ptr);
+    const ptr_ty = try func.types.intern(.{ .ptr = .global });
     const qout = try func.appendBlockParam(entry, ptr_ty);
 
     const orig_insts = func.blockInsts(entry);

@@ -328,7 +328,7 @@ pub const CompiledSass = struct { code: []u32, reg_count: u32, writes_depth: boo
 pub fn compileToSassRegs(gpa: std.mem.Allocator, code: []const u8, stage: isel.Stage) !CompiledSass {
     var func = try spirv.parseSpirv(gpa, code);
     defer func.deinit();
-    var kernel = try isel.compileShader(gpa, &func, stage);
+    var kernel = try isel.compileShader(gpa, &func, stage, isel.nvidia_abi);
     defer kernel.deinit(gpa);
     return .{ .code = try gpa.dupe(u32, kernel.code), .reg_count = kernel.reg_count, .writes_depth = kernel.writes_depth, .color_targets = kernel.color_targets };
 }
@@ -986,7 +986,9 @@ test "a vertex-pulling VS (gl_VertexIndex -> UBO array) compiles to SASS with AL
             0x321 => if ((sass[i + 1] >> 8) & 0x3ff == 0x2fc) {
                 has_ald_vid = true;
             },
-            0x224 => has_imad = true,
+            // IMAD in any form: register multiplier (0x224), immediate multiplier
+            // (0x824), and the 64-bit wide variants of each the address math uses.
+            0x224, 0x824, 0x225, 0x825 => has_imad = true,
             0xb82 => has_ldc = true,
             0x981 => has_ldg = true,
             else => {},
