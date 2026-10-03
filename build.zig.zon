@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .xml = .{
-            .url = "git+https://github.com/ianprime0509/zig-xml.git#b97f2ab4868ae3cac9902b33a40d3f31d2df739d",
-            .hash = "xml-0.2.0-ZTbP3yI6AgB9Rpd2hQrueO63ib0Bm6mQiL_WB1t7JAmP",
+            .url = "git+https://github.com/ianprime0509/zig-xml.git#d73304c3d56d6331a0caca4d339607e7c740aab5",
+            .hash = "xml-0.2.0-ZTbP35V4AgA_pFiWGWiBILJK7ifCCvj7mbiGfyMcEi2K",
         },
         .wayland = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#33118796096c0bd14cfb971f20811fc763939dce",
-            .hash = "wayland-0.1.0-J5KKz6aUBgBCnQXAHtwGsiw0VoUmDP4uUkgJQAwb2ewR",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#3956a7bc033fba3e79a9a779f281358d478b856a",
+            .hash = "wayland-0.1.0-J5KKz6aUBgDsn2EeORaIla9lwyZfKO4hS81W2mhJRDEN",
         },
         .asahi = .{
             .path = "subproject/asahi",
