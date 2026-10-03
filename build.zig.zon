@@ -16,20 +16,20 @@
             .path = "subproject/asahi",
         },
         .vulcan = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan.git#2344d6b704ea23b9063f3752e2ad5f774d8d83d6",
-            .hash = "vulcan-0.0.0-d6EfZDVmqQCcHIU66CrFzDI18a_bXfYSBs8Oj9GAU44q",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan.git#d0651fe68a916275016e07680ad880db5b0a7d86",
+            .hash = "vulcan-0.0.0-d6EfZDVmqQCjLMGqcIpWtmyk8EMGNto8IlgNYFDkQ2Xz",
         },
         .drm = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/drm.zig#25adace9df06b8b859ee52cc0832bcc4c2223c3a",
             .hash = "drm-0.1.0-ObSCTywHAQAeCZ7R4ZAVRLD63FEkmWIQfOhnfwQwoiBF",
         },
         .gbm = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/gbm.zig#f71153e3003374573f5a3e664a8efa50cdccf47e",
-            .hash = "gbm-0.1.0-B1lS4sajAAAcYVNDSp6zbOYClrq3RBQW5fNwnyu4tgB2",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/gbm.zig#893bfa3c087709cc7110fe2cbe83b094b94a74c3",
+            .hash = "gbm-0.1.0-B1lS4sajAABggGZoObgioDrU7i2ZJM3neTtM-vq9fFY_",
         },
         .nvidia = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/nvidia.zig#b6dcae75412bf7cbe0eea391597c7cda90a8e7c7",
-            .hash = "nvidia-0.1.0-nX_095UyCwCWFeTFvwrg4XK8O2S0lgZgjVSS64CtTgJZ",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/nvidia.zig#2eb511adb224c55d2357d5862e91460272c4a777",
+            .hash = "nvidia-0.1.0-nX_095kyCwAr_8MApFKBDjtHz1UWJyWuasgd2aPNGbum",
         },
     },
     .paths = .{

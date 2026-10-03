@@ -5,11 +5,11 @@
     .fingerprint = 0xcba53fd6ae20eca5,
     .dependencies = .{
         .conduit = .{
-            .url = "git+https://github.com/Midstall/conduit#3bc7ccc26996b2df0762faa5850097ced99999a2",
-            .hash = "conduit-0.1.0-R_mFrLfPAwDBoHFXBD1qiB40JpQmLfu5el1rdS_O2uP9",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/conduit.git#cb9b7130b72b71001cb4347e11b0b383c0fbcdc4",
+            .hash = "conduit-0.1.0-R_mFrINUBQDxhZBhJcDJ9Jxw0Wsxo3iTZl6rKdR-o7QF",
         },
         .uefi = .{
-            .url = "git+https://github.com/Midstall/uefi.zig#e5c9c30f847845c406da08dea2faf79964b0e793",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/uefi.zig#e5c9c30f847845c406da08dea2faf79964b0e793",
             .hash = "uefi-0.1.0-1okz4b5QAAD-ImP4Q86o97td2DpQNfFhltlBjgnLdL8X",
         },
     },
