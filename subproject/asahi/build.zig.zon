@@ -5,8 +5,8 @@
     .fingerprint = 0xcba53fd6ae20eca5,
     .dependencies = .{
         .conduit = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/conduit.git#cb9b7130b72b71001cb4347e11b0b383c0fbcdc4",
-            .hash = "conduit-0.1.0-R_mFrINUBQDxhZBhJcDJ9Jxw0Wsxo3iTZl6rKdR-o7QF",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/conduit.git#b7899bf1f025ef2f8d20976d8e7d32d445c684ec",
+            .hash = "conduit-0.1.0-R_mFrIdUBQD4Uo3q3o39oVSC6BI7d0vDWdnqNdJwyhX2",
         },
         .uefi = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/uefi.zig#e5c9c30f847845c406da08dea2faf79964b0e793",
