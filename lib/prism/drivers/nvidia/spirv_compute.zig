@@ -79,7 +79,7 @@ pub fn runIntBinaryKernel(dev: *NvDevice, spirv_code: []const u8, x: i32, y: i32
     // (384 bytes). buildQmd fills the constant-buffer fields up to dword 58.
     // The rest must be zeroed because the hardware reads the full descriptor.
     const QMD_DWORDS_V05: usize = 96;
-    var qmd: [QMD_DWORDS_V05]u32 = [_]u32{0} ** QMD_DWORDS_V05;
+    var qmd: [QMD_DWORDS_V05]u32 = @splat(0);
     compute.buildQmd(qmd[0..compute.QMD_DWORDS], .{
         .prog_va = codem.va,
         .register_count = kernel.reg_count,

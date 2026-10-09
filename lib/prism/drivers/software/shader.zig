@@ -97,7 +97,7 @@ test "bad magic is rejected" {
 test "compute module retains its SPIR-V bytes" {
     const gpa = std.testing.allocator;
     // A 4-word (16-byte) dummy SPIR-V-shaped blob. Decode only checks the length.
-    const code = [_]u8{ 0x03, 0x02, 0x23, 0x07 } ** 4;
+    const code: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 0x03, 0x02, 0x23, 0x07 })));
     var m = try ShaderModule.decode(gpa, .compute, &code);
     defer m.deinit();
     try std.testing.expect(m.compute_spirv != null);

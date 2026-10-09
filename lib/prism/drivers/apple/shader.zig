@@ -41,7 +41,7 @@ test "apple compute shader module wraps the AGX kernel bytes" {
 
 test "apple rejects vertex/fragment shader modules" {
     const gpa = std.testing.allocator;
-    const bytes = [_]u8{0} ** 8;
+    const bytes: [8]u8 = @splat(0);
     try std.testing.expectError(error.NotImplemented, ShaderModule.create(gpa, .{ .stage = .vertex, .code = &bytes }));
     try std.testing.expectError(error.NotImplemented, ShaderModule.create(gpa, .{ .stage = .fragment, .code = &bytes }));
 }

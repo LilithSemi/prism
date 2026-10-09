@@ -706,8 +706,8 @@ pub const Context = struct {
         const stride: u32 = @intCast(total * 4);
 
         // Snapshot the VS/FS UBOs into the ring so emitDrawState binds stable VAs (same as a draw).
-        var ubo_va = [_]u64{0} ** 8;
-        var ubo_bound = [_]bool{false} ** 8;
+        var ubo_va: [8]u64 = @splat(0);
+        var ubo_bound: [8]bool = @splat(false);
         for (cap.ubos, 0..) |ub, i| {
             if (i >= 8) break;
             if (ub) |r| {
@@ -726,7 +726,7 @@ pub const Context = struct {
         const rt_va = self.ensureTfDummyRt() orelse return error.OutOfMemory;
         gfx.beginBlockLinearFmt(&s, threed.BLACKWELL_A, rt_va, 64, 64, @import("resource.zig").colorTargetFormat(.rgba8_unorm), 4);
         gfx.initDrawState(&s, 64, 64, self.tls.va, self.cb0.va);
-        var no_tex = [_]?TexBinding{null} ** 8;
+        var no_tex: [8]?TexBinding = @splat(null);
         try self.emitDrawState(&s, p, &ubo_va, &ubo_bound, &no_tex, false, false);
         gfx.setViewport(&s, 0, 0, 64, 64, 0.0, 1.0);
         if (cap.vertex_buffer) |vbh| {
@@ -771,7 +771,7 @@ pub const Context = struct {
         var rt: ?*Resource = null;
         // MRT extra color targets (index 1..7). index 0 is `rt`. n_color_targets = 1 + the
         // highest bound extra index, telling the ROP how many targets to write.
-        var extra_ct = [_]?*Resource{null} ** hal.MAX_COLOR_TARGETS;
+        var extra_ct: [hal.MAX_COLOR_TARGETS]?*Resource = @splat(null);
         var n_color_targets: u32 = 1;
         var color: ?hal.Color = null;
         var pipe: ?*Pipeline = null;
@@ -969,9 +969,9 @@ pub const Context = struct {
             // pipeline's state is set (so write masks apply) and the surface clip is valid.
             var cur_p: ?*Pipeline = null;
             var cur_vb: ?*Resource = null;
-            var cur_ubo_va = [_]u64{0} ** 8;
-            var cur_ubo_bound = [_]bool{false} ** 8;
-            var cur_tex = [_]?TexBinding{null} ** 8;
+            var cur_ubo_va: [8]u64 = @splat(0);
+            var cur_ubo_bound: [8]bool = @splat(false);
+            var cur_tex: [8]?TexBinding = @splat(null);
             var state_dirty = true;
             var cleared = false;
             // Track the current viewport across the batch. null = full render target (what the

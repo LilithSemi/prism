@@ -109,7 +109,7 @@ pub const Device = struct {
     /// asahi node, so it returned NoDevice either way and masked it).
     pub fn renderNodeDriver(n: u32, name_buf: []u8) ?[]const u8 {
         var nbuf: [80]u8 = undefined;
-        const sys = std.fmt.bufPrintZ(&nbuf, "/sys/class/drm/renderD{d}/device/driver", .{n}) catch return null;
+        const sys = std.mem.printSentinel(&nbuf, "/sys/class/drm/renderD{d}/device/driver", .{n}, 0) catch return null;
         var lbuf: [256]u8 = undefined;
         const link = std.os.linux.readlink(sys.ptr, &lbuf, lbuf.len);
         const ll: isize = @bitCast(link);
@@ -132,7 +132,7 @@ pub const Device = struct {
             const driver = renderNodeDriver(n, &nbuf) orelse continue;
             if (std.mem.eql(u8, driver, "asahi")) {
                 var pbuf: [64]u8 = undefined;
-                const path = std.fmt.bufPrintZ(&pbuf, "/dev/dri/renderD{d}", .{n}) catch continue;
+                const path = std.mem.printSentinel(&pbuf, "/dev/dri/renderD{d}", .{n}, 0) catch continue;
                 return openNode(path) catch continue;
             }
         }
@@ -143,7 +143,7 @@ pub const Device = struct {
     /// fallback for when sysfs discovery is unavailable).
     pub fn openNode(path: []const u8) Error!Device {
         var buf: [128]u8 = undefined;
-        const z = std.fmt.bufPrintZ(&buf, "{s}", .{path}) catch return error.OpenFailed;
+        const z = std.mem.printSentinel(&buf, "{s}", .{path}, 0) catch return error.OpenFailed;
         const rc = std.os.linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
         switch (std.posix.errno(rc)) {
             .SUCCESS => return .{ .fd = @intCast(rc) },

@@ -721,16 +721,16 @@ pub fn resetThreadState() void {
     bound_copy_read_buffer = 0;
     bound_copy_write_buffer = 0;
     bound_uniform_buffer = 0;
-    uniform_buffer_bindings = [_]GLuint{0} ** MAX_UNIFORM_BUFFER_BINDINGS;
-    uniform_buffer_offsets = [_]GLintptr{0} ** MAX_UNIFORM_BUFFER_BINDINGS;
-    transform_feedback_bindings = [_]GLuint{0} ** MAX_TRANSFORM_FEEDBACK_BUFFERS;
+    uniform_buffer_bindings = @splat(0);
+    uniform_buffer_offsets = @splat(0);
+    transform_feedback_bindings = @splat(0);
     bound_transform_feedback_buffer = 0;
     tf_active = false;
     tf_primitive_mode = 0;
-    tf_write_offsets = [_]usize{0} ** MAX_TRANSFORM_FEEDBACK_BUFFERS;
+    tf_write_offsets = @splat(0);
     tf_paused = false;
     current_program = 0;
-    attribs = [_]AttribArray{.{}} ** MAX_ATTRIBS;
+    attribs = @splat(.{});
     bound_framebuffer = 0;
     bound_renderbuffer = 0;
     bound_read_framebuffer = 0;
@@ -741,13 +741,13 @@ pub fn resetThreadState() void {
     draw_buffer0 = GL_BACK;
     active_occlusion_query = 0;
     bound_vao = 0;
-    default_vao = .{ .attribs = [_]AttribArray{.{}} ** MAX_ATTRIBS, .element_buffer = 0 };
+    default_vao = .{ .attribs = @splat(.{}), .element_buffer = 0 };
     active_texture_unit = 0;
-    bound_texture_2d = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
-    bound_texture_cube = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
-    bound_texture_3d = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
-    bound_texture_2darray = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
-    bound_sampler = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+    bound_texture_2d = @splat(0);
+    bound_texture_cube = @splat(0);
+    bound_texture_3d = @splat(0);
+    bound_texture_2darray = @splat(0);
+    bound_sampler = @splat(0);
     unpack_alignment = 4;
     unpack_row_length = 0;
     unpack_skip_pixels = 0;
@@ -2144,8 +2144,8 @@ const Framebuffer = struct {
     // MRT: GL_COLOR_ATTACHMENT1..N-1 (index 0 here = attachment 1). A fragment shader with
     // multiple located `out`s (or gl_FragData[]) writes each to its matching attachment. The
     // draw binds these as HAL extra color targets (cb.setColorTarget). Deferred-shading G-buffers.
-    extra_color_tex: [prism.hal.MAX_COLOR_TARGETS - 1]GLuint = .{0} ** (prism.hal.MAX_COLOR_TARGETS - 1),
-    extra_color_rb: [prism.hal.MAX_COLOR_TARGETS - 1]GLuint = .{0} ** (prism.hal.MAX_COLOR_TARGETS - 1),
+    extra_color_tex: [prism.hal.MAX_COLOR_TARGETS - 1]GLuint = @splat(0),
+    extra_color_rb: [prism.hal.MAX_COLOR_TARGETS - 1]GLuint = @splat(0),
     depth_tex: GLuint = 0, // GL_DEPTH_ATTACHMENT texture id (0 = none)
     depth_rb: GLuint = 0, // GL_DEPTH_ATTACHMENT renderbuffer id (0 = none)
     stencil_rb: GLuint = 0, // GL_STENCIL_ATTACHMENT renderbuffer id (0 = none). A packed
@@ -2378,7 +2378,7 @@ const SAMPLER_LOCATION_FLAG: GLint = @bitCast(@as(u32, 0x4000_0000));
 /// state lives in the live globals (`attribs` + `bound_element_buffer`). Bind saves/restores them.
 const VertexArray = struct {
     id: GLuint,
-    attribs: [MAX_ATTRIBS]AttribArray = [_]AttribArray{.{}} ** MAX_ATTRIBS,
+    attribs: [MAX_ATTRIBS]AttribArray = @splat(.{}),
     element_buffer: GLuint = 0,
     bound_once: bool = false,
 };
@@ -2438,14 +2438,14 @@ fn findSampler(id: GLuint) ?*Sampler {
     return null;
 }
 /// The sampler object bound to each texture unit (0 = none -> the texture's own sampler state).
-threadlocal var bound_sampler: [MAX_TEXTURE_UNITS]GLuint = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+threadlocal var bound_sampler: [MAX_TEXTURE_UNITS]GLuint = @splat(0);
 
 var next_id: GLuint = 1; // 0 is "no object" in GL. ids are dense+monotonic.
 
 /// The VAO bound by glBindVertexArray (0 = the default VAO, whose state is the plain globals). The
 /// default VAO's state when a non-0 VAO is current is stashed in `default_vao`.
 threadlocal var bound_vao: GLuint = 0;
-threadlocal var default_vao: struct { attribs: [MAX_ATTRIBS]AttribArray, element_buffer: GLuint } = .{ .attribs = [_]AttribArray{.{}} ** MAX_ATTRIBS, .element_buffer = 0 };
+threadlocal var default_vao: struct { attribs: [MAX_ATTRIBS]AttribArray, element_buffer: GLuint } = .{ .attribs = @splat(.{}), .element_buffer = 0 };
 
 fn findVertexArray(id: GLuint) ?*VertexArray {
     for (vertex_arrays.items) |v| if (v.id == id) return v;
@@ -2877,11 +2877,11 @@ threadlocal var bound_uniform_buffer: GLuint = 0; // GL_UNIFORM_BUFFER (glBuffer
 /// from the buffer at its (glUniformBlockBinding-assigned) point at draw time. Only the low
 /// binding points are honored (the software UBO descriptor space is narrow).
 pub const MAX_UNIFORM_BUFFER_BINDINGS = 8;
-threadlocal var uniform_buffer_bindings: [MAX_UNIFORM_BUFFER_BINDINGS]GLuint = [_]GLuint{0} ** MAX_UNIFORM_BUFFER_BINDINGS;
+threadlocal var uniform_buffer_bindings: [MAX_UNIFORM_BUFFER_BINDINGS]GLuint = @splat(0);
 /// The byte offset into the bound buffer for each binding point (glBindBufferRange). 0 for a
 /// glBindBufferBase (whole-buffer) binding. A non-zero offset selects a sub-range (dynamic UBO
 /// streaming / packing several blocks in one buffer). The block's data_size bounds the read.
-threadlocal var uniform_buffer_offsets: [MAX_UNIFORM_BUFFER_BINDINGS]GLintptr = [_]GLintptr{0} ** MAX_UNIFORM_BUFFER_BINDINGS;
+threadlocal var uniform_buffer_offsets: [MAX_UNIFORM_BUFFER_BINDINGS]GLintptr = @splat(0);
 
 // --- Transform feedback (GLES3) state ---------------------------------------
 /// The number of transform-feedback capture binding points tracked (index in glBindBufferBase(
@@ -2889,7 +2889,7 @@ threadlocal var uniform_buffer_offsets: [MAX_UNIFORM_BUFFER_BINDINGS]GLintptr = 
 pub const MAX_TRANSFORM_FEEDBACK_BUFFERS = 4;
 /// The buffer object bound at each transform-feedback binding point (glBindBufferBase). Index 0 is
 /// the interleaved capture target.
-threadlocal var transform_feedback_bindings: [MAX_TRANSFORM_FEEDBACK_BUFFERS]GLuint = [_]GLuint{0} ** MAX_TRANSFORM_FEEDBACK_BUFFERS;
+threadlocal var transform_feedback_bindings: [MAX_TRANSFORM_FEEDBACK_BUFFERS]GLuint = @splat(0);
 /// The generic GL_TRANSFORM_FEEDBACK_BUFFER binding (glBindBuffer / glBindBufferBase set it too);
 /// glBufferData + glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, ...) operate on it.
 threadlocal var bound_transform_feedback_buffer: GLuint = 0;
@@ -2901,13 +2901,13 @@ threadlocal var tf_primitive_mode: GLenum = 0;
 /// The running byte write cursor into each capture buffer, advancing across draws within a span.
 /// GL_INTERLEAVED_ATTRIBS uses only index 0 (all varyings tightly packed into binding 0);
 /// GL_SEPARATE_ATTRIBS uses index i for varying i (its own buffer at binding point i).
-threadlocal var tf_write_offsets: [MAX_TRANSFORM_FEEDBACK_BUFFERS]usize = [_]usize{0} ** MAX_TRANSFORM_FEEDBACK_BUFFERS;
+threadlocal var tf_write_offsets: [MAX_TRANSFORM_FEEDBACK_BUFFERS]usize = @splat(0);
 /// Whether the active transform-feedback span is paused (glPauseTransformFeedback). While paused
 /// a draw does not capture. The write cursors hold so glResumeTransformFeedback appends after them.
 threadlocal var tf_paused: bool = false;
 
 threadlocal var current_program: GLuint = 0;
-threadlocal var attribs: [MAX_ATTRIBS]AttribArray = [_]AttribArray{.{}} ** MAX_ATTRIBS;
+threadlocal var attribs: [MAX_ATTRIBS]AttribArray = @splat(.{});
 /// The framebuffer bound to GL_DRAW_FRAMEBUFFER (glBindFramebuffer / GL_FRAMEBUFFER). 0 = the
 /// default framebuffer (the window/pbuffer backbuffer). Non-zero redirects clears/draws to the
 /// FBO's attachments. `bound_read_framebuffer` is the GLES3 READ target (glReadPixels / the source
@@ -2923,14 +2923,14 @@ threadlocal var bound_renderbuffer: GLuint = 0;
 // texture id bound to each unit (glBindTexture). At draw, a sampler uniform's selected
 // unit -> the texture bound here -> the HAL combined-image-sampler binding.
 threadlocal var active_texture_unit: u32 = 0;
-threadlocal var bound_texture_2d: [MAX_TEXTURE_UNITS]GLuint = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+threadlocal var bound_texture_2d: [MAX_TEXTURE_UNITS]GLuint = @splat(0);
 // The GL_TEXTURE_CUBE_MAP texture id bound to each unit (a separate binding point from 2D,
 // per the GL spec). A `samplerCube` uniform samples the cube bound here on its selected unit.
-threadlocal var bound_texture_cube: [MAX_TEXTURE_UNITS]GLuint = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+threadlocal var bound_texture_cube: [MAX_TEXTURE_UNITS]GLuint = @splat(0);
 // The GL_TEXTURE_3D texture id bound to each unit. A `sampler3D` uniform samples it.
-threadlocal var bound_texture_3d: [MAX_TEXTURE_UNITS]GLuint = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+threadlocal var bound_texture_3d: [MAX_TEXTURE_UNITS]GLuint = @splat(0);
 // The GL_TEXTURE_2D_ARRAY texture id bound to each unit. A `sampler2DArray` uniform samples it.
-threadlocal var bound_texture_2darray: [MAX_TEXTURE_UNITS]GLuint = [_]GLuint{0} ** MAX_TEXTURE_UNITS;
+threadlocal var bound_texture_2darray: [MAX_TEXTURE_UNITS]GLuint = @splat(0);
 // glPixelStorei(GL_UNPACK_ALIGNMENT): row alignment for glTexImage2D pixel data (1/2/4/8).
 threadlocal var unpack_alignment: GLint = 4;
 // glPixelStorei(GL_UNPACK_ROW_LENGTH / SKIP_PIXELS / SKIP_ROWS): let a texture upload read a
@@ -6074,7 +6074,7 @@ pub fn compileShader(shader: GLuint) void {
         const linux = std.os.linux;
         _ = linux.mkdir("/tmp/prism_spv", 0o755);
         var namebuf: [64]u8 = undefined;
-        const nm = std.fmt.bufPrintZ(&namebuf, "/tmp/prism_spv/{s}_{d}.spv", .{ @tagName(s.stage), spv_dump_seq }) catch return;
+        const nm = std.fmt.bufPrintSentinel(&namebuf, "/tmp/prism_spv/{s}_{d}.spv", .{ @tagName(s.stage), spv_dump_seq }, 0) catch return;
         spv_dump_seq += 1;
         const fd_us = linux.open(nm.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
         if (@as(isize, @bitCast(fd_us)) >= 0) {
@@ -7341,7 +7341,7 @@ pub fn beginTransformFeedback(primitive_mode: GLenum) void {
     tf_active = true;
     tf_paused = false;
     tf_primitive_mode = primitive_mode;
-    tf_write_offsets = [_]usize{0} ** MAX_TRANSFORM_FEEDBACK_BUFFERS;
+    tf_write_offsets = @splat(0);
 }
 
 /// glEndTransformFeedback(): close the capture span.
@@ -7804,7 +7804,7 @@ const RenderTargets = struct {
     // MRT: HAL images for GL_COLOR_ATTACHMENT1..N-1 (index 0 = attachment 1), contiguous from
     // the first bound extra attachment up to extra_color_count. The draw binds these via
     // cb.setColorTarget(1+i, ...). A fragment shader's located `out`s land in each.
-    extra_colors: [prism.hal.MAX_COLOR_TARGETS - 1]?*prism.hal.Resource = .{null} ** (prism.hal.MAX_COLOR_TARGETS - 1),
+    extra_colors: [prism.hal.MAX_COLOR_TARGETS - 1]?*prism.hal.Resource = @splat(null),
     extra_color_count: u32 = 0,
 };
 
@@ -8023,7 +8023,7 @@ fn resolveRenderTargets(dev: prism.hal.Device, surf: *state.Surface, want_depth:
     // MRT: resolve GL_COLOR_ATTACHMENT1..N-1 into HAL images. Only a contiguous run from
     // attachment 1 is bound (a gap would leave the ROP without a target for that slot). The
     // count stops at the first empty slot. Each becomes a HAL extra color target at the draw.
-    var extra_colors: [prism.hal.MAX_COLOR_TARGETS - 1]?*prism.hal.Resource = .{null} ** (prism.hal.MAX_COLOR_TARGETS - 1);
+    var extra_colors: [prism.hal.MAX_COLOR_TARGETS - 1]?*prism.hal.Resource = @splat(null);
     var extra_count: u32 = 0;
     for (f.extra_color_tex, f.extra_color_rb, 0..) |etex, erb, i| {
         const img: ?*prism.hal.Resource = if (etex != 0) blk: {
@@ -8982,7 +8982,7 @@ test "boxDownsample averages each 2x2 block per channel (mip generation)" {
         200, 210, 220, 230, // texel (0,1)
         40, 50, 60, 70, // texel (1,1)
     };
-    var dst = [_]u8{0} ** 4;
+    var dst: [4]u8 = @splat(0);
     boxDownsample(&dst, 1, 1, &src, 2, 2, 4);
     // Channel 0: round((0+100+200+40)/4) = round(85) = 85; ch1: (10+110+210+50)/4=95; etc.
     try std.testing.expectEqual(@as(u8, 85), dst[0]);
@@ -8992,7 +8992,7 @@ test "boxDownsample averages each 2x2 block per channel (mip generation)" {
 
     // A 1x1 source (odd/degenerate): every dst texel clamps to the single source texel.
     const src1 = [_]u8{ 42, 43, 44, 45 };
-    var dst1 = [_]u8{0} ** 4;
+    var dst1: [4]u8 = @splat(0);
     boxDownsample(&dst1, 1, 1, &src1, 1, 1, 4);
     try std.testing.expectEqual(@as(u8, 42), dst1[0]);
     try std.testing.expectEqual(@as(u8, 45), dst1[3]);

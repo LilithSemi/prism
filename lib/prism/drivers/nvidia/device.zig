@@ -52,7 +52,7 @@ pub const Device = struct {
     /// The GPU's ASCII model name (e.g. "NVIDIA GeForce RTX 5070"), queried once
     /// at create time and stored so caps() can hand out a stable slice. `name` is
     /// the populated subslice. The rest is the backing buffer.
-    name_buf: [64]u8 = [_]u8{0} ** 64,
+    name_buf: [64]u8 = @splat(0),
     name: []const u8 = "NVIDIA GPU",
     /// Lazily-created copy-engine + a cached sysmem detile buffer, used by
     /// readbackPresent to detile a block-linear RT on the GPU (CE) instead of the
@@ -1316,7 +1316,7 @@ test "nvidia exportResource returns a real dma-buf fd for a block-linear color R
     // Acceptance gate: readlink /proc/self/fd/<fd> must contain "dmabuf".
     // Build the /proc path from the integer fd (null-terminated for the raw syscall).
     var path_z_buf: [80]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_z_buf, "/proc/self/fd/{d}", .{desc.fd}) catch return error.SkipZigTest;
+    const path_z = std.fmt.bufPrintSentinel(&path_z_buf, "/proc/self/fd/{d}", .{desc.fd}, 0) catch return error.SkipZigTest;
     var link_buf: [256]u8 = undefined;
     const rc = std.os.linux.readlink(path_z.ptr, &link_buf, link_buf.len);
     const eno = std.os.linux.errno(rc);

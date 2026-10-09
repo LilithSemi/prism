@@ -192,7 +192,7 @@ fn runVsVertex(t: *Resource, p: *Pipeline, prog: *const @import("pipeline.zig").
         const indices = [_]i32{ @intCast(vertex_index), @intCast(instance_index) };
         spirv_jit.runGraphicsPulling(&prog.vs, prog.vs_index_count, prog.vs_buffers, indices[0..prog.vs_index_count], vs_bufs[0..prog.vs_buffers], vout) catch return null;
     } else {
-        var inputs = [_]f32{0} ** raster.MAX_VS_INPUTS;
+        var inputs: [raster.MAX_VS_INPUTS]f32 = @splat(0);
         _ = gatherVsInputs(p, vb.?, vertex_index, &inputs) orelse return null;
         if (prog.vs_inputs > inputs.len) return null;
         spirv_jit.runGraphics(&prog.vs, prog.vs_inputs, prog.vs_buffers, &inputs, vs_bufs[0..prog.vs_buffers], vout) catch return null;
@@ -238,7 +238,7 @@ pub fn captureTransformFeedback(cap: hal.TransformFeedbackCapture) hal.Error!usi
 
     // Convert the binding-indexed UBO resources to raw byte pointers, then remap them to the VS's
     // entry-param order via vs_buffer_bindings (mirrors drawShaded's UBO wiring).
-    var ubo_bytes: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var ubo_bytes: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     {
         var b: usize = 0;
         while (b < cap.ubos.len and b < ubo_bytes.len) : (b += 1) {
@@ -248,7 +248,7 @@ pub fn captureTransformFeedback(cap: hal.TransformFeedbackCapture) hal.Error!usi
             }
         }
     }
-    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     {
         var cursor: usize = 0;
         var k: usize = 0;
@@ -274,7 +274,7 @@ pub fn captureTransformFeedback(cap: hal.TransformFeedbackCapture) hal.Error!usi
             spirv_jit.runGraphicsPulling(&prog.vs, prog.vs_index_count, prog.vs_buffers, indices[0..prog.vs_index_count], vs_bufs[0..prog.vs_buffers], &vout) catch return error.InvalidArgument;
         } else {
             const vbb = vb orelse return error.InvalidArgument;
-            var inputs = [_]f32{0} ** raster.MAX_VS_INPUTS;
+            var inputs: [raster.MAX_VS_INPUTS]f32 = @splat(0);
             _ = gatherVsInputs(p, vbb, cap.first_vertex + v, &inputs) orelse return error.InvalidArgument;
             if (prog.vs_inputs > inputs.len) return error.InvalidArgument;
             spirv_jit.runGraphics(&prog.vs, prog.vs_inputs, prog.vs_buffers, &inputs, vs_bufs[0..prog.vs_buffers], &vout) catch return error.InvalidArgument;
@@ -366,12 +366,12 @@ fn drawShaded(t: *Resource, p: *Pipeline, vb: ?*Resource, first_vertex: u32, ins
     // rasterShadedFmt. The VS receives its buffers in entry-param order, so remap each VS buffer
     // param to the UBO at its tagged binding (vs_buffer_bindings[k]). A param with no tag (-1)
     // falls back to declaration order via a running cursor (a hand-built VS without bindings).
-    var ubo_ptrs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var ubo_ptrs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     {
         var b: usize = 0;
         while (b < ubos.len and b < ubo_ptrs.len) : (b += 1) ubo_ptrs[b] = ubos[b];
     }
-    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     buildVsBufs(prog, ubos, tex, &vs_bufs);
 
     // Per-vertex VS outputs: position(4) + varyings.
@@ -482,12 +482,12 @@ fn drawLinePoint(t: *Resource, p: *Pipeline, vb: ?*Resource, first_vertex: u32, 
     const pulling = prog.vs_index_count > 0;
     if (!pulling and vb == null) return;
 
-    var ubo_ptrs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var ubo_ptrs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     {
         var b: usize = 0;
         while (b < ubos.len and b < ubo_ptrs.len) : (b += 1) ubo_ptrs[b] = ubos[b];
     }
-    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var vs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     {
         var cursor: usize = 0;
         var k: usize = 0;
@@ -574,11 +574,11 @@ fn execute(cb: *CommandBuffer) void {
     var stencil_target: ?*Resource = null;
     var pipeline: ?*Pipeline = null;
     var vbuf: ?*Resource = null;
-    var ubos: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var ubos: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     var tex: ?sampler.TexDesc = null;
     var scissor: ?hal.ScissorRect = null;
     var viewport: ?hal.Viewport = null;
-    var color_rts: [7]?*Resource = .{null} ** 7; // MRT color targets 1..7 (0 = target)
+    var color_rts: [7]?*Resource = @splat(null); // MRT color targets 1..7 (0 = target)
     for (cb.cmds.items) |cmd| switch (cmd) {
         .set_render_target => |t| target = t,
         .set_color_target => |ct| if (ct.index == 0) {
@@ -915,7 +915,7 @@ test "draw with undersized vertex buffer is safely skipped" {
     const gpa = std.testing.allocator;
 
     // Render target: 4x4 rgba8 image, pre-cleared to 0.
-    var target_pixels = [_]u8{0} ** (4 * 4 * 4);
+    var target_pixels: [4 * 4 * 4]u8 = @splat(0);
     var target = Resource{
         .kind = .image,
         .bytes = &target_pixels,
@@ -925,7 +925,7 @@ test "draw with undersized vertex buffer is safely skipped" {
     };
 
     // Vertex buffer way too small (only 1 byte) to hold any vertex data.
-    var tiny_buf = [_]u8{0} ** 1;
+    var tiny_buf: [1]u8 = @splat(0);
     var vbuf = Resource{ .kind = .buffer, .bytes = &tiny_buf };
 
     // Pipeline: stride=24 (8 pos + 16 col), two attributes at locations 0 and 1.
@@ -962,7 +962,7 @@ test "draw with correct buffer writes a pixel" {
     const gpa = std.testing.allocator;
 
     // 8x8 render target.
-    var target_pixels = [_]u8{0} ** (8 * 8 * 4);
+    var target_pixels: [8 * 8 * 4]u8 = @splat(0);
     var target = Resource{
         .kind = .image,
         .bytes = &target_pixels,
@@ -974,7 +974,7 @@ test "draw with correct buffer writes a pixel" {
     // stride=24: bytes 0..7 = xy (pos), bytes 8..23 = rgba (col).
     // Big white triangle covering most of the image in NDC.
     const stride: usize = 24;
-    var vb_bytes = [_]u8{0} ** (3 * stride);
+    var vb_bytes: [3 * stride]u8 = @splat(0);
     const write_f32 = struct {
         fn f(buf: []u8, off: usize, v: f32) void {
             const bytes = std.mem.toBytes(v);

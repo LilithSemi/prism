@@ -389,7 +389,7 @@ const SHARED_LAYOUT_VERTEX_COMPUTE: u6 = 0x24;
 /// Little-endian bit writer over a fixed scratch buffer - the genxml structs
 /// are little-endian bit arrays, so we OR fields in at absolute bit offsets.
 const BitWriter = struct {
-    words: [16]u32 = [_]u32{0} ** 16,
+    words: [16]u32 = @splat(0),
 
     fn set(self: *BitWriter, start: u32, size: u32, value: u64) void {
         var bit = start;
@@ -1130,7 +1130,7 @@ test "multi-VA UNIFORM_DATA layout: N pointers consecutive little-endian" {
     // layout the USC Uniform load (N*4 halves) consumes so buffer i lands in
     // u(2i)_u(2i+1). Reproduce that fill and assert the byte layout.
     const vas = [_]u64{ 0x2_0000_0000, 0x2_0000_4000, 0x2_0000_8000 };
-    var udata: [64]u8 = [_]u8{0} ** 64;
+    var udata: [64]u8 = @splat(0);
     for (vas, 0..) |va, i| {
         std.mem.writeInt(u64, udata[i * 8 ..][0..8], va, .little);
     }

@@ -740,10 +740,10 @@ pub const BindingKind = enum { none, storage_buffer, uniform_buffer, combined_im
 /// kinds[i] records whether it was bound as a storage/uniform buffer or a
 /// combined-image-sampler. images[i]/samplers[i] hold the texture binding.
 pub const DescriptorSet = struct {
-    buffers: [MAX_BINDINGS]?*Buffer = .{null} ** MAX_BINDINGS,
-    kinds: [MAX_BINDINGS]BindingKind = .{.none} ** MAX_BINDINGS,
-    images: [MAX_BINDINGS]?*Image = .{null} ** MAX_BINDINGS,
-    samplers: [MAX_BINDINGS]?*Sampler = .{null} ** MAX_BINDINGS,
+    buffers: [MAX_BINDINGS]?*Buffer = @splat(null),
+    kinds: [MAX_BINDINGS]BindingKind = @splat(.none),
+    images: [MAX_BINDINGS]?*Image = @splat(null),
+    samplers: [MAX_BINDINGS]?*Sampler = @splat(null),
     fn toHandle(self: *DescriptorSet) vk.VkDescriptorSet {
         return @intCast(@intFromPtr(self));
     }
@@ -936,7 +936,7 @@ pub const CommandBuffer = extern struct {
     // offset. Each cmdDraw snapshots the whole block (PUSH_CONSTANT_SIZE bytes) so a
     // shader can read any offset. pc_dirty marks that at least one push happened.
     // Reset clears it.
-    push_constants: [PUSH_CONSTANT_SIZE]u8 = .{0} ** PUSH_CONSTANT_SIZE,
+    push_constants: [PUSH_CONSTANT_SIZE]u8 = @splat(0),
     pc_dirty: bool = false,
     // The current scissor (vkCmdSetScissor dynamic state), snapshotted into each draw.
     // VkRect2D is framebuffer-pixel top-left origin, matching the HAL convention exactly,
@@ -2877,20 +2877,20 @@ fn executePassInstance(
     }
 
     // Per-draw push-constant scratch HAL resources (kept valid until submit returns).
-    var pc_res: [MAX_GFX_DRAWS]?*prism.hal.Resource = .{null} ** MAX_GFX_DRAWS;
+    var pc_res: [MAX_GFX_DRAWS]?*prism.hal.Resource = @splat(null);
     defer for (pc_res) |r| {
         if (r) |res| dev.hal().destroyResource(res);
     };
     // Per-draw expanded-index vertex streams (vkCmdDrawIndexed): indexed vertices gathered into a
     // flat non-indexed buffer, kept valid until submit returns.
-    var idx_res: [MAX_GFX_DRAWS]?*prism.hal.Resource = .{null} ** MAX_GFX_DRAWS;
+    var idx_res: [MAX_GFX_DRAWS]?*prism.hal.Resource = @splat(null);
     defer for (idx_res) |r| {
         if (r) |res| dev.hal().destroyResource(res);
     };
     // Per-draw HAL pipeline variants for dynamic stencil (vkCmdSetStencil*): a draw whose pipeline
     // declares dynamic stencil ref/masks needs a HAL pipeline carrying the live values (the HAL
     // bakes stencil into the pipeline), rebuilt here and freed after submit. Null for static draws.
-    var dyn_pipes: [MAX_GFX_DRAWS]?*prism.hal.Pipeline = .{null} ** MAX_GFX_DRAWS;
+    var dyn_pipes: [MAX_GFX_DRAWS]?*prism.hal.Pipeline = @splat(null);
     defer for (dyn_pipes) |p| {
         if (p) |pl| dev.hal().destroyPipeline(pl);
     };

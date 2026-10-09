@@ -105,15 +105,15 @@ const CommandBuffer = struct {
     depth_clear: ?f32 = null,
     /// Bound uniform blocks, indexed by binding (the TGSI CONST unit). A driver-
     /// side cap of 8 bindings mirrors the small UBO count Prism shaders use.
-    ubos: [8]?*hal.Resource = .{null} ** 8,
+    ubos: [8]?*hal.Resource = @splat(null),
     /// Bound combined-image-samplers, indexed by binding (the TGSI SAMP unit).
-    textures: [8]?hal.TextureBinding = .{null} ** 8,
+    textures: [8]?hal.TextureBinding = @splat(null),
     /// A pending MSAA resolve (multisample `src` -> single-sample `dst`), emitted as
     /// a BLIT after the draw at submit. Null when the pass has no resolve attachment.
     resolve_req: ?struct { src: *hal.Resource, dst: *hal.Resource, width: u32, height: u32, format: hal.Format } = null,
     /// Additional MRT color targets. Index 0 is `rt`. Indices 1..7 are the extras.
     /// A fragment shader's `layout(location = i) out` writes to color_rts[i-1].
-    extra_rts: [7]?*hal.Resource = .{null} ** 7,
+    extra_rts: [7]?*hal.Resource = @splat(null),
 
     fn setRenderTarget(ptr: *anyopaque, target: *hal.Resource) hal.Error!void {
         const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
@@ -203,10 +203,10 @@ const CommandBuffer = struct {
         self.scissor = null;
         self.depth_res = null;
         self.depth_clear = null;
-        self.ubos = .{null} ** 8;
-        self.textures = .{null} ** 8;
+        self.ubos = @splat(null);
+        self.textures = @splat(null);
         self.resolve_req = null;
-        self.extra_rts = .{null} ** 7;
+        self.extra_rts = @splat(null);
         self.clear_color = .{};
     }
     fn deinit(ptr: *anyopaque) void {

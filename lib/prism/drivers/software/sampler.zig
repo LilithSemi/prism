@@ -106,7 +106,7 @@ pub const TexDesc = extern struct {
     // implicit sample: the footprint's major/minor axes give the sample count + the finer LOD. All
     // zero when the coord is computed / the texture is not mipmapped (falls back to isotropic).
     grad_uv: [4]f32 = .{ 0, 0, 0, 0 },
-    level_off: [MAX_MIP_LEVELS]u32 = [_]u32{0} ** MAX_MIP_LEVELS,
+    level_off: [MAX_MIP_LEVELS]u32 = @splat(0),
     /// The stored texel format; the fetch decodes it to linear/normalized RGBA f32. Defaults
     /// to the historical 8-bit unorm path (so existing rgba8 descriptors are unchanged).
     format: TexFormat = .rgba8_unorm,
@@ -116,7 +116,7 @@ pub const TexDesc = extern struct {
     /// `sampleTextureCube` picks the face from the sampled direction. A 2D descriptor leaves
     /// this false and every field defaulted, so 2D sampling is byte-identical.
     is_cube: bool = false,
-    face_off: [6]u32 = [_]u32{0} ** 6,
+    face_off: [6]u32 = @splat(0),
     /// 3D texture: when true this is a `sampler3D` with `depth` Z-slices of `width`x`height`,
     /// packed slice-major in `pixels`. The vec3-coordinate host sampler trilinearly interpolates
     /// the volume (mutually exclusive with is_cube). `depth` is the slice count.
@@ -1003,7 +1003,7 @@ test "mip selection picks the level the LOD names (trilinear blends)" {
         .mip_filter = .linear,
         .levels = 2,
     };
-    desc.level_off = [_]u32{0} ** MAX_MIP_LEVELS;
+    desc.level_off = @splat(0);
     desc.level_off[1] = 16; // level 1 starts after level 0 (2*2*4 = 16 bytes)
     var out: [4]f32 = undefined;
     // lod 0 -> level 0 (red).
@@ -1049,7 +1049,7 @@ test "anisotropic filtering keeps the fine-axis mip on a grazing footprint (isot
         .address_u = .repeat,
         .address_v = .repeat,
     };
-    desc.level_off = [_]u32{0} ** MAX_MIP_LEVELS;
+    desc.level_off = @splat(0);
     desc.level_off[1] = l1;
     desc.implicit_lod = 1.0; // the isotropic LOD the rasterizer would compute (log2(2))
     desc.grad_uv = .{ 1.0 / 64.0, 0, 0, 16.0 / 64.0 };
@@ -1082,7 +1082,7 @@ test "explicit LOD (textureLod): the req_lod arg selects the mip level" {
         .mip_filter = .nearest,
         .levels = 2,
     };
-    desc.level_off = [_]u32{0} ** MAX_MIP_LEVELS;
+    desc.level_off = @splat(0);
     desc.level_off[1] = 16;
     var out: [4]f32 = undefined;
     // req_lod 0 (desc.lod stays 0) -> level 0 (red).

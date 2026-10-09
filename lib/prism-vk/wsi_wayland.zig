@@ -348,7 +348,7 @@ pub fn blitRgbaToXrgb(dst: []u8, src: []const u8, width: u32, height: u32) void 
 
 test "blitRgbaToXrgb swaps R and B channels" {
     var src = [_]u8{ 10, 20, 30, 40, 50, 60, 70, 80 };
-    var dst = [_]u8{0} ** 8;
+    var dst: [8]u8 = @splat(0);
     blitRgbaToXrgb(&dst, &src, 2, 1);
     // pixel0: R=10 G=20 B=30 -> B,G,R,X
     try std.testing.expectEqual(@as(u8, 30), dst[0]);

@@ -1857,7 +1857,7 @@ test "eglGetProcAddress resolves the GLES2 state-query entry points (the loader-
         "glReadPixels",                 "glGetString",
     };
     for (names) |n| {
-        const z = try std.testing.allocator.dupeZ(u8, n);
+        const z = try std.testing.allocator.dupeSentinel(u8, n, 0);
         defer std.testing.allocator.free(z);
         try std.testing.expect(eglGetProcAddress(z.ptr) != null);
     }
@@ -2912,8 +2912,8 @@ test "glTexStorage3D: immutable 2D-array storage rejects glTexImage3D, accepts g
     glTexImage3D(gles.GL_TEXTURE_2D_ARRAY, 0, gles.GL_RGBA, 2, 2, 2, 0, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, null);
     try std.testing.expectEqual(gles.GL_INVALID_OPERATION, glGetError());
     // Layer 0 = red, layer 1 = blue.
-    const red = [_]u8{ 255, 0, 0, 255 } ** 4;
-    const blue = [_]u8{ 0, 0, 255, 255 } ** 4;
+    const red: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 255, 0, 0, 255 })));
+    const blue: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 0, 0, 255, 255 })));
     glTexSubImage3D(gles.GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 2, 2, 1, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, &red);
     glTexSubImage3D(gles.GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 2, 2, 1, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, &blue);
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
@@ -4212,7 +4212,7 @@ fn runFboStencil(dpy_magic: usize) !void {
     // fb, whose CPU write side lands in a throwaway de-swizzle scratch on nvidia and never reaches
     // the GPU surface. glReadPixels returns rows bottom-up (GL origin bottom-left); the left/right
     // columns span full height so any row discriminates.
-    var rgba: [64 * 64 * 4]u8 = .{0} ** (64 * 64 * 4);
+    var rgba: [64 * 64 * 4]u8 = @splat(0);
     glReadPixels(0, 0, W, W, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, &rgba);
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
     const at = struct {
@@ -5950,7 +5950,7 @@ fn runVertexTextureFetch(dpy_magic: usize) !void {
     var tex: gles.GLuint = 0;
     glGenTextures(1, @ptrCast(&tex));
     glBindTexture(gles.GL_TEXTURE_2D, tex);
-    const px = [_]u8{ 200, 0, 0, 255 } ** 4;
+    const px: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 200, 0, 0, 255 })));
     glTexImage2D(gles.GL_TEXTURE_2D, 0, gles.GL_RGBA, 2, 2, 0, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, &px);
     glTexParameteri(gles.GL_TEXTURE_2D, gles.GL_TEXTURE_MIN_FILTER, gles.GL_NEAREST);
     glTexParameteri(gles.GL_TEXTURE_2D, gles.GL_TEXTURE_MAG_FILTER, gles.GL_NEAREST);
@@ -7052,7 +7052,7 @@ test "GLES3 caps queries 2: compressed-texture-formats list + MAX_ELEMENT_INDEX 
     glGetIntegerv(gles.GL_NUM_COMPRESSED_TEXTURE_FORMATS, @ptrCast(&n));
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
     try std.testing.expect(n >= 5);
-    var fmts = [_]gles.GLint{0} ** 32;
+    var fmts: [32]gles.GLint = @splat(0);
     glGetIntegerv(gles.GL_COMPRESSED_TEXTURE_FORMATS, @ptrCast(&fmts));
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
     var saw_etc1 = false;
@@ -7203,7 +7203,7 @@ test "GL_PACK_ROW_LENGTH / SKIP_PIXELS / SKIP_ROWS: read a region into a sub-rec
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
 
     // Destination: 5 pixels wide x 4 tall of RGBA8, all bytes sentinel 0xAB.
-    var dstbuf: [5 * 4 * 4]u8 = [_]u8{0xAB} ** (5 * 4 * 4);
+    var dstbuf: [5 * 4 * 4]u8 = @splat(0xAB);
     glPixelStorei(gles.GL_PACK_ROW_LENGTH, 5); // dest rows are 5 pixels wide
     glPixelStorei(gles.GL_PACK_SKIP_PIXELS, 1); // start at column 1
     glPixelStorei(gles.GL_PACK_SKIP_ROWS, 1); // start at row 1
@@ -9382,7 +9382,7 @@ test "EGL 3D-texture oracle: a sampler3D LUT selects/blends Z-slices by the vec3
     // glTexSubImage3D: overwrite slice 1 (z=1) with GREEN, then NEAREST z=0.75 -> green (the
     // sub-update landed on the right slice) while z=0.25 -> still red.
     glTexParameteri(gles.GL_TEXTURE_3D, gles.GL_TEXTURE_MAG_FILTER, @intCast(gles.GL_NEAREST));
-    const green = [_]u8{ 0, 255, 0, 255 } ** 4; // 4 texels (one slice)
+    const green: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 0, 255, 0, 255 }))); // 4 texels (one slice)
     glTexSubImage3D(gles.GL_TEXTURE_3D, 0, 0, 0, 1, 2, 2, 1, gles.GL_RGBA, gles.GL_UNSIGNED_BYTE, &green);
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
     draw(co_loc, 0.5, 0.5, 0.75);
@@ -10111,7 +10111,7 @@ test "EGL map-buffer-range oracle: positions written through glMapBufferRange dr
 
     // A VBO sized for 3 vec2s, filled with ZEROS (a degenerate triangle). glMapBufferRange then
     // writes the real fullscreen-triangle positions through the mapped pointer.
-    const zeros = [_]f32{0} ** 6;
+    const zeros: [6]f32 = @splat(0);
     var vbo: gles.GLuint = 0;
     glGenBuffers(1, @ptrCast(&vbo));
     glBindBuffer(gles.GL_ARRAY_BUFFER, vbo);
@@ -10551,7 +10551,7 @@ test "texture formats: sRGB decodes the EOTF on sample; half-float stores fp16 t
     // (fp16 0x3800) samples back to ~128 in the rgba8 backbuffer, proving the fp16 upload +
     // the sampler's fp16 read work end-to-end.
     const half_half: u16 = @bitCast(@as(f16, 0.5));
-    const hf = [_]u8{ @truncate(half_half), @truncate(half_half >> 8) } ** 4; // R=G=B=A=0.5 fp16
+    const hf: [8]u8 = @bitCast(@as([4][2]u8, @splat(.{ @truncate(half_half), @truncate(half_half >> 8) }))); // R=G=B=A=0.5 fp16
     const half_r = try sampleR(dpy, @intCast(gles.GL_RGBA), gles.GL_RGBA, gles.GL_HALF_FLOAT_OES, &hf);
     try std.testing.expect(half_r > 118 and half_r < 140);
 }
@@ -11284,7 +11284,7 @@ test "glmark2-shaped attributes (position/normal/texcoord) resolve by NAME and t
 
     // Separate per-attribute VBOs (glmark2's Mesh layout), bound to the resolved locations.
     const positions = [_]f32{ -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0 };
-    const normals = [_]f32{ 0, 0, 1 } ** 6;
+    const normals: [18]f32 = @bitCast(@as([6][3]f32, @splat(.{ 0, 0, 1 })));
     const uvs = [_]f32{ 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1 };
     var vbos: [3]gles.GLuint = undefined;
     glGenBuffers(3, &vbos);
@@ -12071,7 +12071,7 @@ test "EGL UBO oracle: a std140 block with padding (float, vec3, vec2) reads each
 
     // Fill a user buffer per the std140 layout (48 bytes = 12 floats): uA@float0, padding,
     // uB@floats4..7, padding, uC@floats8..10, padding.
-    var blk_bytes = [_]f32{0} ** 12;
+    var blk_bytes: [12]f32 = @splat(0);
     blk_bytes[0] = 0.2; // uA
     blk_bytes[4] = 0.4; // uB.x
     blk_bytes[5] = 0.6; // uB.y

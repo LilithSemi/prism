@@ -307,15 +307,15 @@ test "apple Device vtable is complete (every method bound, no null)" {
     // finalizeDepthTexture (tiled render-depth to sampled ZF32 bridge, nvidia-only),
     // flushMappedImage (re-swizzle a mapped scratch back to a tiled surface, nvidia-only),
     // exportResource (dma-buf export for Wayland present, nvidia-only for now).
-    const fields = std.meta.fields(hal.Device.VTable);
-    try std.testing.expectEqual(@as(usize, 20), fields.len);
-    inline for (fields) |f| {
-        const is_optional = switch (@typeInfo(f.type)) {
+    const info = @typeInfo(hal.Device.VTable).@"struct";
+    try std.testing.expectEqual(@as(usize, 20), info.field_names.len);
+    inline for (info.field_names, info.field_types) |name, F| {
+        const is_optional = switch (@typeInfo(F)) {
             .optional => true,
             else => false,
         };
         if (is_optional) continue;
-        const fn_ptr = @field(vt, f.name);
+        const fn_ptr = @field(vt, name);
         try std.testing.expect(@intFromPtr(fn_ptr) != 0);
     }
 }

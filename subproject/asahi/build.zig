@@ -80,7 +80,8 @@ pub fn build(b: *std.Build) void {
     // A convenience run step (Linux only - the UEFI build is run on the M1).
     if (!is_uefi) {
         const run_probe = b.addRunArtifact(probe);
-        if (b.args) |args| run_probe.addArgs(args);
+        run_probe.addPassthruArgs();
+
         const run_step = b.step("run-asahi-info", "Run the asahi-info probe (needs an AGX GPU)");
         run_step.dependOn(&run_probe.step);
     }

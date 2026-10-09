@@ -1,16 +1,16 @@
 .{
     .name = .asahi,
     .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .fingerprint = 0xcba53fd6ae20eca5,
     .dependencies = .{
         .conduit = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/conduit.git#b7899bf1f025ef2f8d20976d8e7d32d445c684ec",
-            .hash = "conduit-0.1.0-R_mFrIdUBQD4Uo3q3o39oVSC6BI7d0vDWdnqNdJwyhX2",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/conduit.git#ee4577536650baccafef031bfd6805df2a396f3f",
+            .hash = "conduit-0.1.0-R_mFrINSBQDBumznUsVwExYHXxmSKd_o7ensGtl0UwEI",
         },
         .uefi = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/uefi.zig#e5c9c30f847845c406da08dea2faf79964b0e793",
-            .hash = "uefi-0.1.0-1okz4b5QAAD-ImP4Q86o97td2DpQNfFhltlBjgnLdL8X",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/uefi.zig#986da3d3257af14381194a9f6d3305b42ab5c200",
+            .hash = "uefi-0.1.0-1okz4W9QAABRgMd4j0-GeQLna8qyVgujEeAsasKoOP4O",
         },
     },
     .paths = .{ "build.zig.zon", "build.zig", "src", "examples" },

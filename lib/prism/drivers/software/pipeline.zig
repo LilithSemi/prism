@@ -51,9 +51,9 @@ pub const ShaderProgram = struct {
     fs_buffer_kinds: [spirv_jit.GfxBuffers.max]spirv_jit.BufferKind = undefined,
     /// The binding of each FS `.descriptor` param (-1 = no tag -> declaration order), so the
     /// rasterizer feeds it the UBO bound at that binding. Parallel to fs_buffer_kinds.
-    fs_buffer_bindings: [spirv_jit.GfxBuffers.max]i32 = .{-1} ** spirv_jit.GfxBuffers.max,
+    fs_buffer_bindings: [spirv_jit.GfxBuffers.max]i32 = @splat(-1),
     /// The binding of each VS `.descriptor` param (-1 = no tag -> declaration order).
-    vs_buffer_bindings: [spirv_jit.GfxBuffers.max]i32 = .{-1} ** spirv_jit.GfxBuffers.max,
+    vs_buffer_bindings: [spirv_jit.GfxBuffers.max]i32 = @splat(-1),
     /// The kind of each VS pointer param (descriptor / sampler_fn / sampler_desc / ...), in
     /// entry-ABI order. Vertex texture fetch (terrain heightmap displacement) appends a host
     /// sampler-fn + sampler-desc param to the VS, exactly like the FS. The draw path fills each

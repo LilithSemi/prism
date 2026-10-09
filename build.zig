@@ -141,17 +141,21 @@ pub fn build(b: *std.Build) void {
     }
 
     // Render the loader/vendor JSON templates, replacing @LIBDIR@ with the install lib dir.
-    // They describe the Vulkan ICD and the EGL vendor library, both Linux-only.
+    // They describe the Vulkan ICD and the EGL vendor library, both Linux-only. The install
+    // prefix is known only while the install step runs, so the substitution runs there too.
     if (target.result.os.tag == .linux) {
-        const libdir = b.getInstallPath(.lib, "");
         inline for (.{
             .{ "data/vulkan/icd.d/prism.json.in", "share/vulkan/icd.d/prism.json" },
             .{ "data/glvnd/egl_vendor.d/50_prism.json.in", "share/glvnd/egl_vendor.d/50_prism.json" },
         }) |pair| {
-            const tmpl = b.build_root.handle.readFileAlloc(b.graph.io, pair[0], b.allocator, .limited(1 << 16)) catch @panic("read template");
-            const rendered = std.mem.replaceOwned(u8, b.allocator, tmpl, "@LIBDIR@", libdir) catch @panic("OOM");
-            const wf = b.addWriteFiles();
-            const out = wf.add(std.fs.path.basename(pair[1]), rendered);
+            const render = b.addSystemCommand(&.{"sed"});
+            render.addDirectoryArg2(.{ .relative = .{ .base = .install_lib } }, .{
+                .prefix = "s|@LIBDIR@|",
+                .suffix = "|g",
+                .make_absolute = true,
+            });
+            render.addFileArg(b.path(pair[0]));
+            const out = render.captureStdOut(.{ .basename = std.fs.path.basename(pair[1]) });
             b.getInstallStep().dependOn(&b.addInstallFile(out, pair[1]).step);
         }
     }

@@ -62,7 +62,7 @@
               with pkgs;
               (
                 [
-                  zig
+                  zig_0_17
                 ]
                 ++ lib.optionals (stdenv.hostPlatform.isLinux) [
                   pkg-config
@@ -84,15 +84,15 @@
 
             src = lib.cleanSource ./.;
 
-            zigDeps = pkgs.zig.fetchDeps {
+            zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
-              hash = "sha256-MUbFIGOXBQuaSy22K5R8R9nBXdhLyDTBOX2ExvdxzaM=";
+              hash = "sha256-VCjLDQB+1T4Q+tZWmU0GvboDB9RxjYD5lVkLGxyFph0=";
             };
 
             nativeBuildInputs =
               with pkgs;
               [
-                zig
+                zig_0_17
               ]
               ++ lib.optional (pkgs.stdenv.hostPlatform.isLinux) pkg-config;
 

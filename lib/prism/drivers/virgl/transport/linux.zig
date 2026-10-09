@@ -253,7 +253,7 @@ pub const Transport = struct {
     /// Open a render node O_RDWR | O_CLOEXEC.
     fn openNode(path: []const u8) !std.posix.fd_t {
         var buf: [64]u8 = undefined;
-        const z = std.fmt.bufPrintZ(&buf, "{s}", .{path}) catch return error.OpenFailed;
+        const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{path}, 0) catch return error.OpenFailed;
         const rc = std.os.linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
         switch (std.posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),

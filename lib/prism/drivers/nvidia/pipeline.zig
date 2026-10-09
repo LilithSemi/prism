@@ -275,7 +275,7 @@ fn countVsVaryings(code_bytes: []const u8) u32 {
     const VARYING_STRIDE: u32 = 0x10;
     const MAX_VARYINGS: u32 = 32;
     const code = std.mem.bytesAsSlice(u32, code_bytes);
-    var seen = [_]bool{false} ** MAX_VARYINGS;
+    var seen: [MAX_VARYINGS]bool = @splat(false);
     var i: usize = 0;
     while (i + 4 <= code.len) : (i += 4) {
         if (code[i] & 0xfff != 0x322) continue; // AST

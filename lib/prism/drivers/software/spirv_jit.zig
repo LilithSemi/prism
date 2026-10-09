@@ -165,7 +165,7 @@ pub const GfxInfo = struct {
     /// in declaration order. -1 = no binding tag (a hand-built shader without one): the draw
     /// then falls back to declaration order (the running descriptor index). Indexed in ABI
     /// (entry-param append) order, parallel to buffer_kinds. Non-`.descriptor` slots are -1.
-    buffer_bindings: [GfxBuffers.max]i32 = .{-1} ** GfxBuffers.max,
+    buffer_bindings: [GfxBuffers.max]i32 = @splat(-1),
     /// Whether vulcan appended a `sampler_fn` host-sampler function-pointer entry param
     /// (the first time an OpImageSample lowered).
     has_sampler_fn: bool = false,
@@ -522,7 +522,7 @@ pub fn rewriteGraphics(func: *front.Function) !GfxInfo {
     var buffer_count: usize = 0;
     var has_sampler_fn = false;
     var buffer_kinds: [GfxBuffers.max]BufferKind = undefined;
-    var buffer_bindings: [GfxBuffers.max]i32 = .{-1} ** GfxBuffers.max;
+    var buffer_bindings: [GfxBuffers.max]i32 = @splat(-1);
     var input_slots: [MAX_FS_INPUTS]u32 = undefined;
     for (func.blockParams(entry)) |pv| {
         switch (func.types.type_kind(func.valueType(pv))) {
@@ -732,7 +732,7 @@ pub fn rewriteGraphicsQuad(func: *front.Function) !GfxInfo {
     var buffer_count: usize = 0;
     var has_sampler_fn = false;
     var buffer_kinds: [GfxBuffers.max]BufferKind = undefined;
-    var buffer_bindings: [GfxBuffers.max]i32 = .{-1} ** GfxBuffers.max;
+    var buffer_bindings: [GfxBuffers.max]i32 = @splat(-1);
     for (func.blockParams(entry)) |pv| {
         switch (func.types.type_kind(func.valueType(pv))) {
             .ptr => {
@@ -850,7 +850,7 @@ fn GfxSig(comptime Value: type, comptime Ptr: type, comptime Out: type, comptime
         t[nf + nb] = Out;
         break :blk t;
     };
-    const attrs: [nf + nb + 1]std.builtin.Type.Fn.Param.Attributes = @splat(.{});
+    const attrs: [nf + nb + 1]std.builtin.Type.Fn.ParamAttributes = @splat(.{});
     return *const @Fn(&types, &attrs, void, .{ .@"callconv" = .c });
 }
 
@@ -1169,7 +1169,7 @@ test "spirv graphics: a channel-rotate fragment shader JITs and runs natively" {
     // Input color (R,G,B) = (0.1, 0.5, 0.9); the rotate makes (out.r,out.g,out.b)
     // = (B, R, G) = (0.9, 0.1, 0.5), out.a = 1.0. The plain passthrough mapping
     // physically cannot produce this swap.
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0.1, 0.5, 0.9 }, &.{}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 0.9), out[0], 1e-6); // R <- B
     try std.testing.expectApproxEqAbs(@as(f32, 0.1), out[1], 1e-6); // G <- R
@@ -1235,12 +1235,12 @@ fn assertQuadMatchesScalarCfg(gpa: std.mem.Allocator, fs_code: []const u8, nin: 
     defer scompiled.deinit();
     const sentry = mainEntry(&scompiled) orelse return error.NoEntry;
 
-    var sbufs: [GfxBuffers.max]?[*]const u8 = .{null} ** GfxBuffers.max;
+    var sbufs: [GfxBuffers.max]?[*]const u8 = @splat(null);
     const snb = bindBufs(sinfo.buffer_kinds[0..sinfo.buffer_count], cfg, &empty_tex, &sbufs);
 
     var scalar_out: [4][GfxOut.fragment_len]f32 = undefined;
     for (0..4) |k| {
-        scalar_out[k] = [_]f32{0} ** GfxOut.fragment_len;
+        scalar_out[k] = @splat(0);
         scalar_out[k][3] = 1;
         try runGraphicsAt(sentry, sinfo.input_count, snb, inputs4[k][0..nin], sbufs[0..snb], &scalar_out[k]);
     }
@@ -1255,7 +1255,7 @@ fn assertQuadMatchesScalarCfg(gpa: std.mem.Allocator, fs_code: []const u8, nin: 
     defer qcompiled.deinit();
     const qentry = mainEntry(&qcompiled) orelse return error.NoEntry;
 
-    var qbufs: [GfxBuffers.max]?[*]const u8 = .{null} ** GfxBuffers.max;
+    var qbufs: [GfxBuffers.max]?[*]const u8 = @splat(null);
     const qnb = bindBufs(qinfo.buffer_kinds[0..qinfo.buffer_count], cfg, &empty_tex, &qbufs);
 
     // Build the quad inputs: input j is a <4 x f32> of (frag0.j, frag1.j, frag2.j, frag3.j).
@@ -1263,7 +1263,7 @@ fn assertQuadMatchesScalarCfg(gpa: std.mem.Allocator, fs_code: []const u8, nin: 
     for (0..qinfo.input_count) |j| {
         quad_in[j] = .{ inputs4[0][j], inputs4[1][j], inputs4[2][j], inputs4[3][j] };
     }
-    var qout: [quad_out_len]f32 align(16) = .{0} ** quad_out_len;
+    var qout: [quad_out_len]f32 align(16) = @splat(0);
     try runGraphicsQuadAt(qentry, qinfo.input_count, qnb, quad_in[0..qinfo.input_count], qbufs[0..qnb], &qout);
 
     // qout is component-major: out[c*4 + lane]. Compare lane-by-lane to the scalar golden.
@@ -1577,9 +1577,9 @@ test "spirv graphics quad REPRO: glmark2 phong (normalize+dot+max+pow) - sweep N
     const qentry = mainEntry(&qcompiled) orelse return error.NoEntry;
 
     const empty_tex: sampler.TexDesc = .{ .pixels = undefined, .width = 0, .height = 0, .pitch = 0 };
-    var sbufs: [GfxBuffers.max]?[*]const u8 = .{null} ** GfxBuffers.max;
+    var sbufs: [GfxBuffers.max]?[*]const u8 = @splat(null);
     const snb = bindBufs(sinfo.buffer_kinds[0..sinfo.buffer_count], .{}, &empty_tex, &sbufs);
-    var qbufs: [GfxBuffers.max]?[*]const u8 = .{null} ** GfxBuffers.max;
+    var qbufs: [GfxBuffers.max]?[*]const u8 = @splat(null);
     const qnb = bindBufs(qinfo.buffer_kinds[0..qinfo.buffer_count], .{}, &empty_tex, &qbufs);
 
     const ni = sinfo.input_count;
@@ -1607,7 +1607,7 @@ test "spirv graphics quad REPRO: glmark2 phong (normalize+dot+max+pow) - sweep N
         }
         var quad_in: [3]Quad = undefined;
         for (0..ni) |j| quad_in[j] = .{ pts[0][j], pts[1][j], pts[2][j], pts[3][j] };
-        var qout: [quad_out_len]f32 align(16) = .{0} ** quad_out_len;
+        var qout: [quad_out_len]f32 align(16) = @splat(0);
         try runGraphicsQuadAt(qentry, qinfo.input_count, qnb, quad_in[0..ni], qbufs[0..qnb], &qout);
 
         for (0..4) |lane| for (0..4) |c| {
@@ -1658,7 +1658,7 @@ test "spirv graphics quad HEAVY: a DERIVATIVE FS (grad_buf broadcast) - 4-wide S
     // The grad_buf holds the per-triangle screen-space gradients (lane-invariant): 3 dFdx + 3
     // dFdy entries. The heavy widener broadcasts each grad_buf load to all 4 lanes. Distinct
     // varying inputs per lane (they pass through unused here, but exercise the input packing).
-    const grad = [_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6 } ++ [_]f32{0} ** (MAX_GRAD_INPUTS - 6);
+    const grad = [_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6 } ++ @as([MAX_GRAD_INPUTS - 6]f32, @splat(0));
     try assertQuadMatchesScalarCfg(gpa, std.mem.sliceAsBytes(fs), 3, .{
         &.{ 0.1, 0.2, 0.3 },
         &.{ 0.4, 0.5, 0.6 },
@@ -1678,14 +1678,14 @@ test "spirv graphics quad HEAVY: the REAL vkcube FS - 4-wide SIMD matches scalar
     const si = try rewriteGraphics(&sf);
     var min_vi: u32 = std.math.maxInt(u32);
     for (si.grads[0..si.grad_count]) |g| min_vi = @min(min_vi, g.varying_index);
-    var grad_buf = [_]f32{0} ** MAX_GRAD_INPUTS;
+    var grad_buf: [MAX_GRAD_INPUTS]f32 = @splat(0);
     for (si.grads[0..si.grad_count], 0..) |g, i| {
         grad_buf[i] = switch (g.axis) {
             .x => if (g.varying_index == min_vi) 1.0 else 0.0,
             .y => if (g.varying_index == min_vi + 1) 1.0 else 0.0,
         };
     }
-    var px = [_]u8{ 200, 180, 160, 255 } ** 4; // 2x2 textured (non-white so the sample varies)
+    var px: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 200, 180, 160, 255 }))); // 2x2 textured (non-white so the sample varies)
     var tex = sampler.TexDesc{ .pixels = &px, .width = 2, .height = 2, .pitch = 8, .filter = .nearest };
 
     // 4 distinct fragments (frag_pos + texcoord varyings) so the lanes diverge through the
@@ -1755,7 +1755,7 @@ test "spirv graphics: a flat-normal FS (dFdx/dFdy + cross + normalize) JITs + ru
     // Fill grad_buf so dFdx(frag_pos) = (1,0,0) and dFdy(frag_pos) = (0,1,0) (a flat plane
     // in the XY screen). cross = (0,0,1); normalize = (0,0,1); o = (0,0,1,1). The grad_buf
     // index order is the order the derivatives were taken (info.grads).
-    var grad_buf = [_]f32{0} ** MAX_GRAD_INPUTS;
+    var grad_buf: [MAX_GRAD_INPUTS]f32 = @splat(0);
     for (info.grads[0..info.grad_count], 0..) |g, i| {
         // varying_index identifies the component; axis the gradient. dFdx of comp c -> the
         // c-th basis along x; dFdy of comp c -> the c-th basis along y.
@@ -1765,7 +1765,7 @@ test "spirv graphics: a flat-normal FS (dFdx/dFdy + cross + normalize) JITs + ru
         };
     }
     const gbptr: [*]const u8 = @ptrCast(&grad_buf);
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     // The varyings (frag_pos) are unused for the normal here, pass zeros.
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0, 0, 0 }, &.{gbptr}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), out[0], 1e-5); // normal.x
@@ -1800,7 +1800,7 @@ test "spirv graphics: vkcube's real fragment shader inlines, lowers, JITs, and E
     // and assert it writes a finite RGBA color to the output buffer without faulting (the bug
     // faulted before producing any output). The exact color depends on the inlined sRGB curve.
     // We assert it ran (all 4 components finite, alpha written). The proof is no fault.
-    var px = [_]u8{ 255, 255, 255, 255 } ** 4; // 2x2 white RGBA8
+    var px: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 255, 255, 255, 255 }))); // 2x2 white RGBA8
     var tex = sampler.TexDesc{ .pixels = &px, .width = 2, .height = 2, .pitch = 8, .filter = .nearest };
     const tex_ptr: [*]const u8 = @ptrCast(&tex);
     const samplerfn: [*]const u8 = @ptrFromInt(@intFromPtr(&sampler.sampleTexture));
@@ -1819,7 +1819,7 @@ test "spirv graphics: vkcube's real fragment shader inlines, lowers, JITs, and E
     // product is a unit normal. info.grads lists the (varying_index, axis) per grad slot.
     var min_vi: u32 = std.math.maxInt(u32);
     for (info.grads[0..info.grad_count]) |g| min_vi = @min(min_vi, g.varying_index);
-    var grad_buf = [_]f32{0} ** MAX_GRAD_INPUTS;
+    var grad_buf: [MAX_GRAD_INPUTS]f32 = @splat(0);
     for (info.grads[0..info.grad_count], 0..) |g, i| {
         grad_buf[i] = switch (g.axis) {
             .x => if (g.varying_index == min_vi) 1.0 else 0.0,
@@ -1846,9 +1846,9 @@ test "spirv graphics: vkcube's real fragment shader inlines, lowers, JITs, and E
         };
     }
 
-    const inputs = [_]f32{0.5} ** 8; // benign finite varyings (frag_pos + texcoord = white texel)
+    const inputs: [8]f32 = @splat(0.5); // benign finite varyings (frag_pos + texcoord = white texel)
     const sentinel: f32 = -123456.0;
-    var out = [_]f32{sentinel} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(sentinel);
     try runGraphics(&compiled, info.input_count, info.buffer_count, inputs[0..info.input_count], bufs[0..info.buffer_count], &out);
     // The fix: the FS's four color-output stores live in a non-entry block (the inlined
     // branching linearToSrgb returns from two arms, merged by a phi). They are now re-pointed to
@@ -1909,7 +1909,7 @@ test "spirv graphics: a FS using pow() JITs, calls the host math_fn, runs native
     defer compiled.deinit();
 
     const mathfn: [*]const u8 = @ptrFromInt(@intFromPtr(&sampler.mathFn));
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     // x = 3.0 -> pow(3,2) = 9.0.
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{3.0}, &.{mathfn}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 9.0), out[0], 1e-3);
@@ -1957,7 +1957,7 @@ test "spirv graphics: a discarding FS calls the host discard_fn and sets the kil
     defer compiled.deinit();
 
     const dfn: [*]const u8 = @ptrFromInt(@intFromPtr(&discardThunk));
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     discardReset();
     try std.testing.expect(!discarded());
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{}, &.{dfn}, &out);
@@ -2007,7 +2007,7 @@ test "spirv graphics: a FS reading gl_FragCoord classifies its builtin inputs + 
 
     // The rasterizer fills the 4 inputs with the fragment window position. The FS passes
     // them through to the color output.
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 12.5, 34.5, 0.25, 1.0 }, &.{}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 12.5), out[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 34.5), out[1], 1e-4);
@@ -2055,7 +2055,7 @@ test "spirv graphics: a FS writing gl_FragDepth routes it to the depth output sl
     var compiled = try jitFunction(gpa, &func, "main");
     defer compiled.deinit();
 
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{}, &.{}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), out[0], 1e-4); // color.r
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), out[GfxOut.frag_depth_index], 1e-4); // gl_FragDepth
@@ -2086,7 +2086,7 @@ test "spirv graphics: a UBO mat4-MVP vertex shader JITs, reads the uniform, runs
     defer compiled.deinit();
 
     // UBO = a column-major mat4 diag(0.5, 0.5, 1, 1): element (col j, row i) at j*4+i.
-    var mvp = [_]f32{0} ** 16;
+    var mvp: [16]f32 = @splat(0);
     mvp[0] = 0.5; // [0][0]
     mvp[5] = 0.5; // [1][1]
     mvp[10] = 1.0; // [2][2]
@@ -2095,7 +2095,7 @@ test "spirv graphics: a UBO mat4-MVP vertex shader JITs, reads the uniform, runs
 
     // VS inputs: p = (0.8, -0.8), c = (0.1, 0.2, 0.3). The VS computes
     // gl_Position = mvp * vec4(p, 0, 1) = (0.4, -0.4, 0, 1) under the scale.
-    var out = [_]f32{0} ** GfxOut.vertex_len;
+    var out: [GfxOut.vertex_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0.8, -0.8, 0.1, 0.2, 0.3 }, &.{ubo}, &out);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), out[0], 1e-5); // x scaled by 0.5
     try std.testing.expectApproxEqAbs(@as(f32, -0.4), out[1], 1e-5); // y scaled by 0.5
@@ -2127,7 +2127,7 @@ test "control flow: a glslang for-loop accumulator JITs + runs (loop-carried + p
     const f = compiled.entry(Fn, "main") orelse return error.NoEntry;
     const N = 8;
     var in = [_]i32{ 0, 1, 2, 3, 4, 5, 6, 10 };
-    var out = [_]i32{0} ** N;
+    var out: [N]i32 = @splat(0);
     var i: i32 = 0;
     while (i < N) : (i += 1) f(i, @ptrCast(&in), @ptrCast(&out));
     for (0..N) |k| {
@@ -2152,7 +2152,7 @@ test "control flow: a glslang nested if JITs + runs (selection within selection)
     const N = 16;
     var in: [N]i32 = undefined;
     for (0..N) |k| in[k] = @intCast(k);
-    var out = [_]i32{0} ** N;
+    var out: [N]i32 = @splat(0);
     var i: i32 = 0;
     while (i < N) : (i += 1) f(i, @ptrCast(&in), @ptrCast(&out));
     for (0..N) |k| {
@@ -2175,7 +2175,7 @@ test "control flow: a glslang OpSwitch JITs + runs (case + default, merge phi)" 
     const f = compiled.entry(Fn, "main") orelse return error.NoEntry;
     const N = 6;
     var in = [_]i32{ 0, 1, 2, 3, 4, 5 };
-    var out = [_]i32{0} ** N;
+    var out: [N]i32 = @splat(0);
     var i: i32 = 0;
     while (i < N) : (i += 1) f(i, @ptrCast(&in), @ptrCast(&out));
     const want = [_]i32{ 100, 200, 300, 30, 40, 50 };
@@ -2196,13 +2196,13 @@ test "control flow: the vkflow FS (loop + per-iteration conditional) JITs + runs
     defer compiled.deinit();
     const bufs: []const ?[*]const u8 = &.{};
     // uv.x in [0,0.25) -> int(uv.x*4)=0 -> even i (0,2) pass -> 2 adds: c=(0.4,0.2,0.1).
-    var out0 = [_]f32{0} ** GfxOut.fragment_len;
+    var out0: [GfxOut.fragment_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0.1, 0.0 }, bufs, &out0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), out0[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.2), out0[1], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.1), out0[2], 1e-4);
     // uv.x in [0.25,0.5) -> base=1 -> odd i (1,3) pass -> 2 adds, same accumulation.
-    var out1 = [_]f32{0} ** GfxOut.fragment_len;
+    var out1: [GfxOut.fragment_len]f32 = @splat(0);
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0.3, 0.0 }, bufs, &out1);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), out1[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.2), out1[1], 1e-4);
@@ -2219,7 +2219,7 @@ test "control flow: a FS vector loop-carried accumulator JITs + runs (vector phi
     const info = try rewriteGraphics(&func);
     var compiled = try jitFunction(gpa, &func, "main");
     defer compiled.deinit();
-    var out = [_]f32{0} ** GfxOut.fragment_len;
+    var out: [GfxOut.fragment_len]f32 = @splat(0);
     const bufs: []const ?[*]const u8 = &.{};
     try runGraphics(&compiled, info.input_count, info.buffer_count, &.{ 0.0, 0.0 }, bufs, &out);
     // sum i=0..2 of (0.1*i, 0.2, 0.05) = (0.3, 0.6, 0.15).
@@ -2261,7 +2261,7 @@ test "a graphics entry takes more than eight inputs, in order" {
     };
 
     const inputs = [_]f32{ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 };
-    var out = [_]f32{0} ** 12;
+    var out: [12]f32 = @splat(0);
     // Every input is distinct, so a signature that dropped one or swapped two
     // fails here rather than passing on a sum that happens to match.
     try runGraphicsAt(@ptrCast(&Entry.f), inputs.len, 0, &inputs, &.{}, &out);
@@ -2277,7 +2277,7 @@ test "a graphics entry past the limit reports it rather than drawing nothing" {
             out[0] = 1;
         }
     };
-    const inputs = [_]f32{0} ** (max_gfx_inputs + 1);
+    const inputs: [max_gfx_inputs + 1]f32 = @splat(0);
     var out = [_]f32{0};
     try std.testing.expectError(
         error.TooManyInputs,
@@ -2298,7 +2298,7 @@ test "a quad entry takes more than eight inputs too" {
 
     var inputs: [10]Quad = undefined;
     for (&inputs, 0..) |*q, i| q.* = @splat(@floatFromInt(i + 30));
-    var out = [_]f32{0} ** 10;
+    var out: [10]f32 = @splat(0);
     try runGraphicsQuadAt(@ptrCast(&Entry.f), inputs.len, 0, &inputs, &.{}, &out);
     for (out, 0..) |v, i| try std.testing.expectEqual(@as(f32, @floatFromInt(i + 30)), v);
 }

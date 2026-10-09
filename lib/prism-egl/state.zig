@@ -928,7 +928,7 @@ fn dumpFrame(xrgb: []const u8, w: u32, h: u32) void {
     if ((dump_frame % 4 != 0 and dump_frame > 2) or dump_written >= 80) return;
     const linux = std.os.linux;
     var namebuf: [64]u8 = undefined;
-    const name = std.fmt.bufPrintZ(&namebuf, "/tmp/prism_dump/f{d:0>4}.ppm", .{dump_written}) catch return;
+    const name = std.fmt.bufPrintSentinel(&namebuf, "/tmp/prism_dump/f{d:0>4}.ppm", .{dump_written}, 0) catch return;
     const fd_us = linux.open(name.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
     if (@as(isize, @bitCast(fd_us)) < 0) return;
     const fd: i32 = @intCast(fd_us);

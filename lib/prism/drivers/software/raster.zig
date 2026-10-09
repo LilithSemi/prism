@@ -725,7 +725,7 @@ pub fn rasterShadedFmt(
     // once here from the 3 vertices' varying values + screen positions, written into a small
     // gradient buffer, and the FS loads them through its grad_buf pointer. When the FS uses
     // no derivatives (grad_count==0) this is skipped and the FS gets no grad_buf pointer.
-    var grad_vals: [spirv_jit.MAX_GRAD_INPUTS]f32 = .{0} ** spirv_jit.MAX_GRAD_INPUTS;
+    var grad_vals: [spirv_jit.MAX_GRAD_INPUTS]f32 = @splat(0);
     if (prog.fs_grad_count > 0) {
         const dx1 = p1[0] - p0[0];
         const dy1 = p1[1] - p0[1];
@@ -788,7 +788,7 @@ pub fn rasterShadedFmt(
     // the host sampler function pointer, or the gradient buffer pointer. The sampler_fn /
     // grad_buf params are appended lazily and may interleave, so the kind sequence (read off
     // the IR) determines what each x-register slot holds.
-    var fs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = .{null} ** spirv_jit.GfxBuffers.max;
+    var fs_bufs: [spirv_jit.GfxBuffers.max]?[*]const u8 = @splat(null);
     const fs_total_bufs = @min(prog.fs_buffers, fs_bufs.len);
     // A defined zero descriptor for an unbound sampler: sampleTexture reads width==0 and
     // returns transparent black instead of dereferencing the JIT's dummy pointer (a crash).
@@ -996,7 +996,7 @@ pub fn rasterShadedFmt(
                 while (k < prog.fs_inputs and k < fs_in.len) : (k += 1) fs_in[k] = 0;
                 if (has_frag_builtin) fillFragBuiltins(&fs_in, prog.fs_input_slots[0..], nvar, @floatFromInt(x), @floatFromInt(y), pass_z, if (sign > 0) 1.0 else 0.0);
 
-                var color = [_]f32{0} ** spirv_jit.GfxOut.fragment_len; // MRT colors + gl_FragDepth
+                var color: [spirv_jit.GfxOut.fragment_len]f32 = @splat(0); // MRT colors + gl_FragDepth
                 color[3] = 1; // target-0 default alpha
                 spirv_jit.discardReset();
                 if (prog.fs_entry) |fe| {
@@ -1124,7 +1124,7 @@ pub fn rasterShadedFmt(
             // Interpolate the varyings the FS consumes (zero-padded to arity), using the
             // pixel-center barycentrics. The FS's screen-space derivatives come through its
             // grad_buf pointer (assembled in fs_bufs above), not as float inputs.
-            var fs_in = [_]f32{0} ** spirv_jit.GfxOut.vertex_len;
+            var fs_in: [spirv_jit.GfxOut.vertex_len]f32 = @splat(0);
             var k: usize = 0;
             while (k < nvar) : (k += 1) {
                 const rel = if (k < prog.fs_input_slots.len) prog.fs_input_slots[k] else @as(u32, @intCast(k));
@@ -1141,7 +1141,7 @@ pub fn rasterShadedFmt(
                 }
                 fillFragBuiltins(&fs_in, prog.fs_input_slots[0..], nvar, fx, fy, fbz, if (sign > 0) 1.0 else 0.0);
             }
-            var color = [_]f32{0} ** spirv_jit.GfxOut.fragment_len; // MRT colors + gl_FragDepth
+            var color: [spirv_jit.GfxOut.fragment_len]f32 = @splat(0); // MRT colors + gl_FragDepth
             color[3] = 1; // target-0 default alpha
             spirv_jit.discardReset();
             if (prog.fs_entry) |fe| {
@@ -1303,7 +1303,7 @@ fn rasterQuad(
             const lw2: [4]f32 = .{ rw2, rw2 + e2_dx, rw2 + e2_dy, rw2 + e2_dx + e2_dy };
 
             var lane_cov: [4]bool = .{ false, false, false, false };
-            var lane_b: [4][3]f32 = .{.{ 0, 0, 0 }} ** 4;
+            var lane_b: [4][3]f32 = @splat(.{ 0, 0, 0 });
             var lane_z: [4]f32 = .{ 0, 0, 0, 0 };
             var any = false;
             inline for (0..4) |l| {
@@ -1346,7 +1346,7 @@ fn rasterQuad(
                 quad_in[k] = bb0 * c0 + bb1 * c1 + bb2 * c2;
             }
 
-            var qout: [spirv_jit.quad_out_len]f32 align(16) = .{0} ** spirv_jit.quad_out_len;
+            var qout: [spirv_jit.quad_out_len]f32 align(16) = @splat(0);
             // The FS's pointer params (sampler desc / sampler_fn / grad_buf / math_fn) are
             // lane-invariant per triangle (the grad_buf holds the per-triangle screen-space
             // gradients the FS broadcasts. The sampler/math fns and the texture descriptor are
@@ -1385,7 +1385,7 @@ test "depthPasses honors the compare op" {
 }
 
 test "clear fills every pixel" {
-    var px = [_]u8{0} ** (2 * 2 * 4);
+    var px: [2 * 2 * 4]u8 = @splat(0);
     clear(&px, 2, 2, .{ .r = 1, .g = 0, .b = 0, .a = 1 });
     try std.testing.expectEqual(@as(u8, 255), px[0]);
     try std.testing.expectEqual(@as(u8, 0), px[1]);
@@ -1394,7 +1394,7 @@ test "clear fills every pixel" {
 }
 
 test "clear and drawTriangle with zero dimensions do not crash" {
-    var px = [_]u8{} ** 0;
+    var px: [0]u8 = .{};
     clear(&px, 0, 0, .{ .r = 1, .g = 0, .b = 0, .a = 1 });
     clear(&px, 0, 4, .{ .r = 1, .g = 0, .b = 0, .a = 1 });
     clear(&px, 4, 0, .{ .r = 1, .g = 0, .b = 0, .a = 1 });
@@ -1411,7 +1411,7 @@ test "clear and drawTriangle with zero dimensions do not crash" {
 test "triangle covers the center pixel and interpolates" {
     const W = 8;
     const H = 8;
-    var px = [_]u8{0} ** (W * H * 4);
+    var px: [W * H * 4]u8 = @splat(0);
     // Big triangle covering the center, white at all corners.
     const verts = [3]Vertex{
         .{ .x = -1, .y = -1, .r = 1, .g = 1, .b = 1, .a = 1 },
@@ -1430,21 +1430,21 @@ test "triangle covers the center pixel and interpolates" {
 test "float render-target pack/unpack roundtrips within precision" {
     // R32F: exact roundtrip of an out-of-[0,1] value (a float target is not clamped).
     {
-        var px = [_]u8{0} ** 4;
+        var px: [4]u8 = @splat(0);
         packPixel(&px, 0, .r32_float, F32x4{ 7.5, 0, 0, 0 });
         const v = unpackPixel(&px, 0, .r32_float);
         try std.testing.expectEqual(@as(f32, 7.5), v[0]);
     }
     // R16F: roundtrip within f16 precision (and survives >1).
     {
-        var px = [_]u8{0} ** 2;
+        var px: [2]u8 = @splat(0);
         packPixel(&px, 0, .r16_float, F32x4{ 3.25, 0, 0, 0 });
         const v = unpackPixel(&px, 0, .r16_float);
         try std.testing.expectApproxEqAbs(@as(f32, 3.25), v[0], 0.01);
     }
     // RGBA16F: all four channels, an HDR value > 1 survives.
     {
-        var px = [_]u8{0} ** 8;
+        var px: [8]u8 = @splat(0);
         packPixel(&px, 0, .rgba16_float, F32x4{ 0.5, 2.0, 0.25, 1.0 });
         const v = unpackPixel(&px, 0, .rgba16_float);
         try std.testing.expectApproxEqAbs(@as(f32, 0.5), v[0], 0.01);
@@ -1454,7 +1454,7 @@ test "float render-target pack/unpack roundtrips within precision" {
     }
     // R8 / RG8 unorm: clamp to [0,1] then 8-bit quantize.
     {
-        var px = [_]u8{0} ** 2;
+        var px: [2]u8 = @splat(0);
         packPixel(&px, 0, .r8g8_unorm, F32x4{ 1.0, 0.0, 0, 0 });
         try std.testing.expectEqual(@as(u8, 255), px[0]);
         try std.testing.expectEqual(@as(u8, 0), px[1]);
@@ -1468,12 +1468,12 @@ test "MSAA resolve box-averages the N samples per pixel" {
     // 1x1 image, 4 samples: two samples white, two black -> resolve = 0.5 gray.
     const fmt: hal.Format = .rgba8_unorm;
     const bpp = pixelBytes(fmt);
-    var src = [_]u8{0} ** (4 * 4); // 4 samples * 4 bytes
+    var src: [4 * 4]u8 = @splat(0); // 4 samples * 4 bytes
     packPixel(&src, 0 * bpp, fmt, F32x4{ 1, 1, 1, 1 });
     packPixel(&src, 1 * bpp, fmt, F32x4{ 1, 1, 1, 1 });
     packPixel(&src, 2 * bpp, fmt, F32x4{ 0, 0, 0, 1 });
     packPixel(&src, 3 * bpp, fmt, F32x4{ 0, 0, 0, 1 });
-    var dst = [_]u8{0} ** 4;
+    var dst: [4]u8 = @splat(0);
     resolveMsaa(&dst, &src, 1, 1, fmt, 4);
     // 2/4 white -> ~128. This INTERMEDIATE value is the MSAA edge-blend signature
     // (distinct from a pure 0 or 255).
@@ -1483,7 +1483,7 @@ test "MSAA resolve box-averages the N samples per pixel" {
 
 test "clearFmt fills an MSAA color buffer (all samples) for a float format" {
     // 1x1 R16F, 2 samples laid out as a 1x(1*2) image: clearFmt walks linearly.
-    var px = [_]u8{0} ** (2 * 2); // 2 samples * 2 bytes
+    var px: [2 * 2]u8 = @splat(0); // 2 samples * 2 bytes
     clearFmt(&px, 1, 2, .r16_float, .{ .r = 0.5, .g = 0, .b = 0, .a = 1 });
     const v0 = unpackPixel(&px, 0, .r16_float);
     const v1 = unpackPixel(&px, 2, .r16_float);
@@ -1566,7 +1566,7 @@ test "quad SIMD rasterization matches the scalar per-fragment path over a whole 
     const W: u32 = 37;
     const H: u32 = 37;
     const screen: [3][2]f32 = .{ .{ 2.0, 35.0 }, .{ 35.0, 33.0 }, .{ 18.0, 1.0 } };
-    var vouts: [3][GfxOut.vertex_len]f32 = .{[_]f32{0} ** GfxOut.vertex_len} ** 3;
+    var vouts: [3][GfxOut.vertex_len]f32 = @splat(@as([GfxOut.vertex_len]f32, @splat(0)));
     // Varyings at location 0 (slots varying_base+0..2): R/G/B per vertex.
     vouts[0][GfxOut.varying_base + 0] = 0.9;
     vouts[0][GfxOut.varying_base + 1] = 0.1;
@@ -1578,8 +1578,8 @@ test "quad SIMD rasterization matches the scalar per-fragment path over a whole 
     vouts[2][GfxOut.varying_base + 1] = 0.25;
     vouts[2][GfxOut.varying_base + 2] = 0.95;
 
-    var px_scalar = [_]u8{0} ** (W * H * 4);
-    var px_quad = [_]u8{0} ** (W * H * 4);
+    var px_scalar: [W * H * 4]u8 = @splat(0);
+    var px_quad: [W * H * 4]u8 = @splat(0);
 
     // Scalar render (quad entry nulled).
     prog.fs_quad_entry = null;
@@ -1704,7 +1704,7 @@ test "rasterShadedFmt blends a translucent fragment over a pre-cleared destinati
     const H: u32 = 32;
     // A triangle covering the center of the buffer.
     const screen: [3][2]f32 = .{ .{ 1.0, 1.0 }, .{ 31.0, 1.0 }, .{ 16.0, 31.0 } };
-    var vouts: [3][GfxOut.vertex_len]f32 = .{[_]f32{0} ** GfxOut.vertex_len} ** 3;
+    var vouts: [3][GfxOut.vertex_len]f32 = @splat(@as([GfxOut.vertex_len]f32, @splat(0)));
 
     const blend = hal.BlendState{
         .enable = true,
@@ -1715,7 +1715,7 @@ test "rasterShadedFmt blends a translucent fragment over a pre-cleared destinati
     };
 
     // Blended render over a blue destination.
-    var px = [_]u8{0} ** (W * H * 4);
+    var px: [W * H * 4]u8 = @splat(0);
     clear(&px, W, H, .{ .r = 0, .g = 0, .b = 1, .a = 1 });
     rasterShadedFmt(&px, W, H, .rgba8_unorm, 1, screen, &vouts, &prog, null, null, null, &.{}, blend, null, &.{}, .{});
 
@@ -1727,7 +1727,7 @@ test "rasterShadedFmt blends a translucent fragment over a pre-cleared destinati
     try std.testing.expectApproxEqAbs(@as(f32, 0.75), @as(f32, @floatFromInt(px[idx + 3])) / 255.0, 1.5 / 255.0);
 
     // Disabled blend: the fragment overwrites the destination (red, alpha 0.5).
-    var px2 = [_]u8{0} ** (W * H * 4);
+    var px2: [W * H * 4]u8 = @splat(0);
     clear(&px2, W, H, .{ .r = 0, .g = 0, .b = 1, .a = 1 });
     rasterShadedFmt(&px2, W, H, .rgba8_unorm, 1, screen, &vouts, &prog, null, null, null, &.{}, .{}, null, &.{}, .{});
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), @as(f32, @floatFromInt(px2[idx + 0])) / 255.0, 1.5 / 255.0);
@@ -1785,10 +1785,10 @@ test "rasterShadedFmt MRT writes each color output to its own target" {
     const W: u32 = 32;
     const H: u32 = 32;
     const screen: [3][2]f32 = .{ .{ 1.0, 1.0 }, .{ 31.0, 1.0 }, .{ 16.0, 31.0 } };
-    var vouts: [3][GfxOut.vertex_len]f32 = .{[_]f32{0} ** GfxOut.vertex_len} ** 3;
+    var vouts: [3][GfxOut.vertex_len]f32 = @splat(@as([GfxOut.vertex_len]f32, @splat(0)));
 
-    var t0 = [_]u8{0} ** (W * H * 4); // color target 0
-    var t1 = [_]u8{0} ** (W * H * 4); // color target 1 (MRT)
+    var t0: [W * H * 4]u8 = @splat(0); // color target 0
+    var t1: [W * H * 4]u8 = @splat(0); // color target 1 (MRT)
     const extra = [_]ColorTarget{.{ .bytes = &t1, .format = .rgba8_unorm }};
     rasterShadedFmt(&t0, W, H, .rgba8_unorm, 1, screen, &vouts, &prog, null, null, null, &.{}, .{}, null, &extra, .{});
 

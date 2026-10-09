@@ -6477,7 +6477,7 @@ test "ORACLE: sRGB + fp16 textures sample correctly on the NVIDIA GPU (TIC sRGB 
         const tex = try dev.createResource(.{ .image = .{ .width = 1, .height = 1, .format = .rgba16_float, .usage = .{ .sampled = true } } });
         defer dev.destroyResource(tex);
         const h: u16 = @bitCast(@as(f16, 0.5));
-        const bytes = [_]u8{ @truncate(h), @truncate(h >> 8) } ** 4;
+        const bytes: [8]u8 = @bitCast(@as([4][2]u8, @splat(.{ @truncate(h), @truncate(h >> 8) })));
         gpumem.write(try dev.mapResource(tex), &bytes);
         const r = try sampleR(dev, pipe, vbuf, tex);
         try std.testing.expect(r > 110 and r < 145); // fp16 0.5 sampled correctly

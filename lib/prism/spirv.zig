@@ -1264,7 +1264,7 @@ test "parseSpirv lowers a SPIR-V function to Vulcan IR" {
 
 test "parseSpirv rejects a non-SPIR-V byte stream" {
     const gpa = std.testing.allocator;
-    const garbage = [_]u8{ 0xde, 0xad, 0xbe, 0xef } ** 8; // bad magic word
+    const garbage: [32]u8 = @bitCast(@as([8][4]u8, @splat(.{ 0xde, 0xad, 0xbe, 0xef }))); // bad magic word
     if (parseSpirv(gpa, &garbage)) |f| {
         var ff = f;
         ff.deinit();

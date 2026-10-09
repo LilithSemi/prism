@@ -114,7 +114,7 @@ fn printDrm(out: anytype) !void {
     var i: u32 = 0;
     while (i < 16) : (i += 1) {
         var path_buf: [32]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "/dev/dri/card{d}", .{i}) catch break;
+        const path = std.fmt.bufPrintSentinel(&path_buf, "/dev/dri/card{d}", .{i}, 0) catch break;
         // Read-only existence probe: O_RDONLY|O_CLOEXEC. We never SET_MASTER or
         // modeset; opening the node read-only only confirms it exists. Close it
         // right back. (Mirrors how platform/drm.zig opens the node, minus RDWR.)

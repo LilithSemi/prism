@@ -506,7 +506,7 @@ test "parse handles the legacy surface-first layout" {
 
 test "blitRgbaToXrgb swaps R and B channels" {
     var src = [_]u8{ 10, 20, 30, 40, 50, 60, 70, 80 };
-    var dst = [_]u8{0} ** 8;
+    var dst: [8]u8 = @splat(0);
     blitRgbaToXrgb(&dst, &src, 2, 1);
     try std.testing.expectEqual(@as(u8, 30), dst[0]);
     try std.testing.expectEqual(@as(u8, 20), dst[1]);

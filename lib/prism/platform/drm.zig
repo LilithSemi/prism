@@ -48,7 +48,7 @@ const drm_chromaticity = extern struct {
 const hdr_metadata_infoframe = extern struct {
     eotf: u8 = 0,
     metadata_type: u8 = 0,
-    display_primaries: [3]drm_chromaticity = [_]drm_chromaticity{.{}} ** 3,
+    display_primaries: [3]drm_chromaticity = @splat(.{}),
     white_point: drm_chromaticity = .{},
     max_display_mastering_luminance: u16 = 0,
     min_display_mastering_luminance: u16 = 0,
@@ -336,7 +336,7 @@ pub fn create(gpa: std.mem.Allocator) hal.Error!platform.Display {
 
 pub fn createNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!platform.Display {
     var zbuf: [80]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{path}) catch return error.InvalidArgument;
+    const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
     if (std.posix.errno(ofd) != .SUCCESS) {
         dbg(.{}, "open card0", std.posix.errno(ofd));
@@ -869,7 +869,7 @@ pub fn createGpuScanout(gpa: std.mem.Allocator) hal.Error!*GpuDisplay {
 
 pub fn createGpuScanoutNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!*GpuDisplay {
     var zbuf: [80]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{path}) catch return error.InvalidArgument;
+    const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
     if (std.posix.errno(ofd) != .SUCCESS) {
         dbg(.{}, "open card0 (gpu scanout)", std.posix.errno(ofd));
@@ -1100,7 +1100,7 @@ pub fn createHdrDisplay(gpa: std.mem.Allocator) hal.Error!*HdrDisplay {
 
 pub fn createHdrDisplayNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!*HdrDisplay {
     var zbuf: [80]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{path}) catch return error.InvalidArgument;
+    const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
     if (std.posix.errno(ofd) != .SUCCESS) {
         dbg(.{}, "open card0 (hdr)", std.posix.errno(ofd));
@@ -1213,7 +1213,7 @@ pub fn makedev(maj: u64, min: u64) u64 {
 /// The returned slice points into `buf`. 64 bytes is plenty.
 pub fn driverForDev(dev: u64, buf: []u8) ?[]const u8 {
     var path_buf: [80]u8 = undefined;
-    const link = std.fmt.bufPrintZ(&path_buf, "/sys/dev/char/{d}:{d}/device/driver", .{ major(dev), minor(dev) }) catch return null;
+    const link = std.fmt.bufPrintSentinel(&path_buf, "/sys/dev/char/{d}:{d}/device/driver", .{ major(dev), minor(dev) }, 0) catch return null;
     const rc = linux.readlinkat(linux.AT.FDCWD, link.ptr, buf.ptr, buf.len);
     if (@as(isize, @bitCast(rc)) < 0) return null; // -errno (e.g. ENOENT: no such device)
     return std.fs.path.basename(buf[0..rc]); // ".../drivers/nvidia" -> "nvidia"

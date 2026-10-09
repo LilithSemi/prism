@@ -186,7 +186,7 @@ pub const SAMPLE_SIZE_B: u8 = 8;
 // arrays). Sized for the largest single word group we build.
 // ---------------------------------------------------------------------------
 const BitWriter = struct {
-    words: [16]u32 = [_]u32{0} ** 16,
+    words: [16]u32 = @splat(0),
 
     fn set(self: *BitWriter, start: u32, size: u32, value: u64) void {
         var bit = start;
