@@ -41,8 +41,8 @@ pub const virglColorFormat = @import("virgl/formats.zig").virglColorFormat;
 /// Build a HAL device over the comptime-selected virgl transport. `args` is the
 /// platform's construction argument (see `InitArgs`). The device owns its 3D
 /// context (created lazily) and the command-stream scratch.
-pub fn createDevice(gpa: std.mem.Allocator, args: InitArgs) hal.Error!hal.Device {
-    return DeviceImpl.create(gpa, args);
+pub fn createDevice(gpa: std.mem.Allocator, io: std.Io, args: InitArgs) hal.Error!hal.Device {
+    return DeviceImpl.create(gpa, io, args);
 }
 
 /// The concrete virgl Device implementation, exposed so a display owner can reach
@@ -74,13 +74,13 @@ fn available(ptr: *anyopaque) bool {
     return hasVirtioGpuRenderNode();
 }
 
-fn registryCreateDevice(ptr: *anyopaque, gpa: std.mem.Allocator) Error!hal.Device {
+fn registryCreateDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) Error!hal.Device {
     _ = ptr;
     if (!on_linux) return error.NotImplemented;
     // Auto-discover the virtio_gpu render node (node = null). If none exists the
     // transport init fails and the error propagates, so createBestDevice skips
     // virgl gracefully on a box with no virtio-gpu.
-    return createDevice(gpa, .{ .node = null });
+    return createDevice(gpa, io, .{ .node = null });
 }
 
 /// Side-effect-free probe: does a /dev/dri/renderD* node bound to the
@@ -116,7 +116,7 @@ test "virgl registry driver exposes its name and drm_driver" {
     // Availability needs a real virtio-gpu render node. Exercise the full path
     // when present, otherwise confirm createDevice is skipped cleanly.
     if (driver.isAvailable()) {
-        const dev = try driver.createDevice(std.testing.allocator);
+        const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     }
 }

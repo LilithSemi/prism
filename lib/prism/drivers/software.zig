@@ -12,9 +12,9 @@ fn available(ptr: *anyopaque) bool {
     _ = ptr;
     return true;
 }
-fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator) Error!Device {
+fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) Error!Device {
     _ = ptr;
-    return SwDevice.create(gpa);
+    return SwDevice.create(gpa, io);
 }
 
 const vtable = Driver.VTable{ .isAvailable = &available, .createDevice = &createDevice };
@@ -33,7 +33,7 @@ test {
 
 test "software driver creates a real device" {
     const gpa = std.testing.allocator;
-    const dev = try driver.createDevice(gpa);
+    const dev = try driver.createDevice(gpa, std.testing.io);
     defer dev.deinit();
     const buf = try dev.createResource(.{ .buffer = .{ .size = 64 } });
     defer dev.destroyResource(buf);

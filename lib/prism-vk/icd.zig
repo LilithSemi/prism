@@ -459,7 +459,7 @@ pub fn createDevice(
     const d = prism.drivers.all[pd.driver_index];
     // Bring up the real HAL device for this driver. The ICD .so is libc-free, so
     // the HAL device's backing allocator is page_allocator (same as our own).
-    const hal_dev = d.createDevice(allocator) catch return .VK_ERROR_INITIALIZATION_FAILED;
+    const hal_dev = d.createDevice(allocator, prism.hal.defaultIo()) catch return .VK_ERROR_INITIALIZATION_FAILED;
     const dev = allocator.create(LogicalDevice) catch {
         hal_dev.deinit();
         return .VK_ERROR_OUT_OF_HOST_MEMORY;

@@ -35,6 +35,7 @@ const RESOURCE_VA_BASE: u64 = 0x2_0000_0000;
 /// bump pointer when freeing the most-recent VA.
 pub const Device = struct {
     gpa: std.mem.Allocator,
+    io: std.Io,
     dev: asahi.Device,
     info: asahi.GpuInfo,
     vm_id: u32,
@@ -43,10 +44,11 @@ pub const Device = struct {
     /// the render-infra range so resource VAs never collide with it.
     next_va: u64 = RESOURCE_VA_BASE,
 
-    pub fn create(gpa: std.mem.Allocator) hal.Error!hal.Device {
+    pub fn create(gpa: std.mem.Allocator, io: std.Io) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
         errdefer gpa.destroy(self);
         self.gpa = gpa;
+        self.io = io;
         self.next_va = RESOURCE_VA_BASE;
 
         self.dev = asahi.Device.open() catch |e| return aserr(e);

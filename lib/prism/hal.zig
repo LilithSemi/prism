@@ -2,6 +2,25 @@ const std = @import("std");
 
 pub const Error = @import("error.zig").Error;
 
+/// The process-wide `std.Io` for the vendor libraries: the host app loads them
+/// with dlopen, so they never see a `std.process.Init` and must own one. Their
+/// entry points run on any thread, so one caller claims the setup.
+var default_threaded: std.Io.Threaded = undefined;
+var default_claimed: std.atomic.Value(bool) = .init(false);
+var default_ready: std.atomic.Value(bool) = .init(false);
+
+pub fn defaultIo() std.Io {
+    if (!default_ready.load(.acquire)) {
+        if (default_claimed.cmpxchgStrong(false, true, .acquire, .monotonic) == null) {
+            default_threaded = .init(std.mem.Allocator.failing, .{});
+            default_ready.store(true, .release);
+        } else {
+            while (!default_ready.load(.acquire)) std.atomic.spinLoopHint();
+        }
+    }
+    return default_threaded.io();
+}
+
 pub const Color = struct {
     r: f32 = 0,
     g: f32 = 0,

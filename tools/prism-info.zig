@@ -24,7 +24,7 @@ fn linuxMain(init: std.process.Init) !void {
         try out.print("    available:    {s}\n", .{if (available) "yes" else "no"});
         if (available) {
             // Actually try to bring the driver up on this machine (eglinfo-style).
-            if (d.createDevice(gpa)) |device| {
+            if (d.createDevice(gpa, io)) |device| {
                 defer device.deinit();
                 try out.print("    createDevice: ok\n", .{});
                 try printCaps(out, device.caps());

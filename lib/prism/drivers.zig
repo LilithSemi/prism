@@ -53,10 +53,10 @@ pub const Selected = struct { driver: Driver, device: driver.Device };
 ///
 /// The caller owns and must deinit the device. Returns null when no driver can
 /// draw here, not even the software fallback.
-pub fn createBestDevice(gpa: std.mem.Allocator) ?Selected {
+pub fn createBestDevice(gpa: std.mem.Allocator, io: std.Io) ?Selected {
     for (all) |d| {
         if (!d.isAvailable()) continue;
-        const dev = d.createDevice(gpa) catch continue;
+        const dev = d.createDevice(gpa, io) catch continue;
         if (!canDraw(gpa, dev)) {
             dev.deinit();
             continue;
@@ -176,7 +176,7 @@ test "drivers list and selection" {
 }
 
 test "createBestDevice brings up a usable device (hardware if present, else software)" {
-    const sel = createBestDevice(std.testing.allocator) orelse return error.NoWorkingDriver;
+    const sel = createBestDevice(std.testing.allocator, std.testing.io) orelse return error.NoWorkingDriver;
     defer sel.device.deinit();
     // It must be genuinely usable, not just selected.
     const r = try sel.device.createResource(.{ .buffer = .{ .size = 16 } });
@@ -200,7 +200,7 @@ test "the device createBestDevice returns can draw, not merely start" {
     // used to win here and fail at that pipeline, with the working software
     // rasterizer behind it never tried.
     const gpa = std.testing.allocator;
-    const sel = createBestDevice(gpa) orelse return error.SkipZigTest;
+    const sel = createBestDevice(gpa, std.testing.io) orelse return error.SkipZigTest;
     defer sel.device.deinit();
     try std.testing.expect(canDraw(gpa, sel.device));
 }
@@ -210,7 +210,7 @@ test "the software rasterizer draws, so it is a real fallback" {
     // and the one in a build sandbox. A fallback that cannot draw is not one.
     const gpa = std.testing.allocator;
     const d = select("software") orelse return error.SkipZigTest;
-    const dev = d.createDevice(gpa) catch return error.SkipZigTest;
+    const dev = d.createDevice(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     try std.testing.expect(canDraw(gpa, dev));
 }

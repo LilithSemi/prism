@@ -752,7 +752,7 @@ pub const Context = struct {
         const semp: *volatile u32 = @ptrCast(@alignCast(self.sem.bytes.ptr));
         semp.* = 0;
         self.queue.submit(self.pbuf.va, s.dwords());
-        try waitFence(semp);
+        try waitFence(self.dev.io, semp);
         return @as(usize, cap.vertex_count) * total * 4;
     }
 
@@ -996,7 +996,7 @@ pub const Context = struct {
                     const fsem: *volatile u32 = @ptrCast(@alignCast(self.sem.bytes.ptr));
                     fsem.* = 0;
                     self.queue.submit(self.pbuf.va, s.dwords());
-                    try waitFence(fsem);
+                    try waitFence(self.dev.io, fsem);
                     s.reset();
                 }
                 switch (cmd) {
@@ -1118,7 +1118,7 @@ pub const Context = struct {
         const semp: *volatile u32 = @ptrCast(@alignCast(self.sem.bytes.ptr));
         semp.* = 0;
         self.queue.submit(self.pbuf.va, s.dwords());
-        try waitFence(semp);
+        try waitFence(self.dev.io, semp);
 
         // MSAA resolve (post-fence): the GPU rendered the supersampled color target. Now that
         // the fence has landed (writes flushed), box-downsample each ssScale block into the
@@ -1231,24 +1231,18 @@ pub const Context = struct {
     /// submit can take many milliseconds, so burning a core that long is wasteful.
     /// The old fixed iteration count could time out a slow-but-valid submit. The
     /// timeout here is wall-clock (5 s).
-    fn waitFence(semp: *volatile u32) hal.Error!void {
+    fn waitFence(io: std.Io, semp: *volatile u32) hal.Error!void {
         var spins: u64 = 0;
-        const start = nowNs();
+        const start = std.Io.Clock.now(.awake, io);
         while (true) {
             if (semp.* == FENCE) return;
             spins += 1;
             if (spins >= 8192) {
-                var req = std.os.linux.timespec{ .sec = 0, .nsec = 50_000 }; // 50 us
-                _ = std.os.linux.nanosleep(&req, null);
-                if (nowNs() - start > 5 * std.time.ns_per_s) return error.DeviceLost;
+                std.Io.sleep(io, .fromNanoseconds(50_000), .awake) catch {};
+                const elapsed = start.durationTo(std.Io.Clock.now(.awake, io));
+                if (elapsed.nanoseconds > 5 * std.time.ns_per_s) return error.DeviceLost;
             }
         }
-    }
-
-    fn nowNs() u64 {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     }
 
     /// Copy a sampled texture's tightly-packed linear staging (filled by the ICD via
@@ -1444,7 +1438,7 @@ pub const Context = struct {
 
 test "nvidia context clears a render target green on the GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -1473,7 +1467,7 @@ test "nvidia mapResource swaps R<->B for an rgba8 RT (the engine renders BGRA) (
     // had its computed R in the B byte). A pure-red clear isolates the swap: R must land
     // in byte 0, B in byte 2. (.bgra8_unorm RTs are not swapped, see the green test.)
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -1497,7 +1491,7 @@ test "nvidia mapResource swaps R<->B for an rgba8 RT (the engine renders BGRA) (
 test "nvidia draws a gradient triangle through the HAL draw path (skips without a GPU)" {
     const sass = nvidia.sass;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1615,7 +1609,7 @@ test "nvidia draws a gradient triangle through the HAL draw path (skips without 
 test "nvidia depth test occludes draw-order-independently on the GPU (skips without a GPU)" {
     const sass = nvidia.sass;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1745,7 +1739,7 @@ test "nvidia depth test occludes draw-order-independently on the GPU (skips with
 test "nvidia stencil clip: a REPLACE mask clips a later EQUAL draw on the GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1853,7 +1847,7 @@ test "nvidia stencil clip: a REPLACE mask clips a later EQUAL draw on the GPU (s
 test "nvidia stencil nested clip: two INCR masks intersect, content shows only the overlap on the GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1967,10 +1961,10 @@ test "nvidia stencil nested clip: two INCR masks intersect, content shows only t
 test "two-sided stencil: front and back faces write DIFFERENT stencil refs, on the NVIDIA GPU and in software (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2087,7 +2081,7 @@ test "two-sided stencil: front and back faces write DIFFERENT stencil refs, on t
 test "nvidia combined depth+stencil: stencil clips AND depth occludes in ONE framebuffer on the GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2212,7 +2206,7 @@ test "nvidia combined depth+stencil: stencil clips AND depth occludes in ONE fra
 test "nvidia depth bias (glPolygonOffset): a negative constant lets a coplanar draw win on the GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2317,7 +2311,7 @@ test "nvidia depth bias (glPolygonOffset): a negative constant lets a coplanar d
 test "nvidia color write mask (glColorMask): masked channels keep the destination on the GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2464,7 +2458,7 @@ test "nvidia instancing: gl_InstanceIndex draws each instance at its UBO offset 
         \\varying vec3 vColor;
         \\void main() { gl_FragColor = vec4(vColor, 1.0); }
     ;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
@@ -2587,7 +2581,7 @@ test "nvidia scissor: SET_SCISSOR clips a fullscreen draw to the top-left quadra
         \\precision mediump float;
         \\void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
     ;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
@@ -2705,7 +2699,7 @@ test "nvidia MSAA: a slanted edge anti-aliases via supersampling on the GPU (par
         \\precision mediump float;
         \\void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
     ;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
@@ -2842,7 +2836,7 @@ test "nvidia MSAA: resolve in a SEPARATE submit (the EGL swapBuffers path) works
         \\precision mediump float;
         \\void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
     ;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
@@ -2914,7 +2908,7 @@ test "nvidia MSAA: resolve in a SEPARATE submit (the EGL swapBuffers path) works
 test "nvidia line primitive: GL_LINES draws a thin band via the hardware line rasterizer (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -2985,7 +2979,7 @@ test "nvidia line primitive: GL_LINES draws a thin band via the hardware line ra
 test "nvidia gl_PointSize: a larger point renders on the GPU (SPH OMAP_POINT_SIZE + hardware point rasterizer) (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -3049,10 +3043,10 @@ test "nvidia gl_PointSize: a larger point renders on the GPU (SPH OMAP_POINT_SIZ
 test "ORACLE-POINTCOORD: gl_PointCoord matches software on the NVIDIA GPU (point sprite s/t gradient) (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -3138,7 +3132,7 @@ test "ORACLE-POINTCOORD: gl_PointCoord matches software on the NVIDIA GPU (point
 test "nvidia gl_VertexID: a vertex-buffer-less full-screen triangle renders on the GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -3206,7 +3200,7 @@ test "nvidia depth is PRESERVED across separate submits within a frame (skips wi
     // the near green already wrote a smaller depth - so the center stays GREEN.
     const sass = nvidia.sass;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -3316,7 +3310,7 @@ test "nvidia depth is PRESERVED across separate submits within a frame (skips wi
 
 test "nvidia presents a rendered framebuffer to a surface (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;

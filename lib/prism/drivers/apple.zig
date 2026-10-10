@@ -24,9 +24,9 @@ fn available(ptr: *anyopaque) bool {
     dev.deinit();
     return true;
 }
-fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator) Error!Device {
+fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) Error!Device {
     _ = ptr;
-    return AppleDevice.create(gpa);
+    return AppleDevice.create(gpa, io);
 }
 
 const vtable = Driver.VTable{ .isAvailable = &available, .createDevice = &createDevice };
@@ -51,7 +51,7 @@ test "apple driver: availability + device creation (skips without an AGX GPU)" {
     // reports absent (the no-AGX dev box path: createBestDevice falls through
     // cleanly, exactly like nvidia on a non-NVIDIA box). Does not require a GPU.
     if (driver.isAvailable()) {
-        const dev = try driver.createDevice(std.testing.allocator);
+        const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     } else {
         // On this no-AGX box availability is false and createDevice would fail to

@@ -1029,7 +1029,7 @@ test "a UBO mat4 vertex shader compiles to SASS with an LDC address load + LDG +
 
 test "HAL createShaderModule compiles SPIR-V to SASS and renders on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1069,7 +1069,7 @@ test "HAL createShaderModule compiles SPIR-V to SASS and renders on the NVIDIA G
 
 test "SPIR-V flat-color triangle renders on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1115,7 +1115,7 @@ test "SPIR-V flat-color triangle renders on the NVIDIA GPU (skips without a GPU)
 
 test "ORACLE-FLOAT-RT: an HDR value (>1.0) renders into an rgba16f RT and reads back UNCLAMPED on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -1177,7 +1177,7 @@ test "ORACLE-FLOAT-RT: an HDR value (>1.0) renders into an rgba16f RT and reads 
 
 test "ORACLE-FLOAT-RT32: an HDR value renders into an rgba32f RT and reads back UNCLAMPED on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -1231,7 +1231,7 @@ test "ORACLE-FLOAT-RT32: an HDR value renders into an rgba32f RT and reads back 
 
 test "ORACLE-FLOAT-MSAA: a 4x-MSAA rgba16f target resolves an HDR value UNCLAMPED on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -1287,7 +1287,7 @@ test "ORACLE-FLOAT-MSAA: a 4x-MSAA rgba16f target resolves an HDR value UNCLAMPE
 
 test "ORACLE-FLOAT-CLEAR: glClear writes an EXACT float value into an rgba16f RT on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 32;
     const H: u32 = 32;
@@ -1318,10 +1318,10 @@ test "ORACLE-FLOAT-CLEAR: glClear writes an EXACT float value into an rgba16f RT
 
 test "ORACLE-DISCARD: an always-discard FS writes NO pixels on the NVIDIA GPU or in software (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1350,10 +1350,10 @@ test "ORACLE-DISCARD: an always-discard FS writes NO pixels on the NVIDIA GPU or
 
 test "ORACLE-FRAGCOORD: gl_FragCoord delivers the window-space pixel position on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1399,10 +1399,10 @@ test "ORACLE-FRAGCOORD: gl_FragCoord delivers the window-space pixel position on
 
 test "ORACLE-FRONTFACE: gl_FrontFacing matches winding identically on software and the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
 
     const W: u32 = 256;
@@ -1441,10 +1441,10 @@ test "ORACLE-FRONTFACE: gl_FrontFacing matches winding identically on software a
 
 test "ORACLE-FRAGDEPTH: gl_FragDepth governs the depth test AND write on the NVIDIA GPU and in software (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 128;
     const H: u32 = 128;
@@ -1534,10 +1534,10 @@ test "ORACLE-FRAGDEPTH: gl_FragDepth governs the depth test AND write on the NVI
 
 test "ORACLE-MRT: a fragment shader writes two render targets on the NVIDIA GPU and in software (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -1602,10 +1602,10 @@ test "ORACLE-MRT: a fragment shader writes two render targets on the NVIDIA GPU 
 
 test "ORACLE-PERDRAW-UBO: draws in ONE submit each read their OWN bound UBO on the NVIDIA GPU and in software (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
     const W: u32 = 128;
     const H: u32 = 128;
@@ -1683,7 +1683,7 @@ test "ORACLE-PERDRAW-UBO: draws in ONE submit each read their OWN bound UBO on t
 
 test "ORACLE-MULTIPIPELINE: two pipelines in ONE submit each render with their own state on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 128;
     const H: u32 = 128;
@@ -1756,11 +1756,11 @@ test "ORACLE-MULTIPIPELINE: two pipelines in ONE submit each render with their o
 
 test "ORACLE-BLEND: a translucent triangle alpha-composites the SAME on the NVIDIA GPU and in software (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const nv = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const nv = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer nv.deinit();
 
     const sw = @import("../software.zig");
-    const sw_dev = try sw.driver.createDevice(gpa);
+    const sw_dev = try sw.driver.createDevice(gpa, std.testing.io);
     defer sw_dev.deinit();
 
     const W: u32 = 256;
@@ -1823,7 +1823,7 @@ test "ORACLE-BLEND: a translucent triangle alpha-composites the SAME on the NVID
 
 test "SPIR-V gradient triangle renders the interpolated varying on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2011,7 +2011,7 @@ fn renderGoldGradient(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, c
 // and interpolation fixes.
 test "ORACLE: gradient varying interpolates LINEARLY across the triangle interior on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2199,7 +2199,7 @@ fn runPosPassthrough(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, cl
 
 test "ORACLE2: position-passthrough varying (aliases gl_Position) interpolates LINEARLY on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2411,7 +2411,7 @@ fn runSecondVarying(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, cle
 
 test "ORACLE3: SECOND varying (slot 0x90) interpolates LINEARLY (not constant 0) on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2502,7 +2502,7 @@ test "vkcube's fragment shader compiles to SASS with MUFU (the host-math / pow l
 // trivial constant FS so the test asserts the VS geometry/coverage, not the FS shading.
 test "vkcube's exact VS draws an on-screen triangle on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2673,7 +2673,7 @@ fn runArithIpa(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, clear: h
 // the GPU: vkcube's lighting/sRGB, derivatives, all read garbage). FS: r = vx*0.5+0.5.
 test "ORACLE4: arithmetic FS (FMul on a freshly-IPA'd varying) reads correctly on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2841,7 +2841,7 @@ fn runDivergent(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, clear: 
 // sRGB branches stop taking the wrong arm (G/B saturating to 255).
 test "ORACLE5: divergent predicated branch takes the correct arm per-lane on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -2904,7 +2904,7 @@ test "ORACLE5: divergent predicated branch takes the correct arm per-lane on the
 test "ORACLE: a default-uniform-block (es2gears) VS reads its bound MaterialColor on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 128;
     const H: u32 = 128;
@@ -3036,7 +3036,7 @@ test "ORACLE: a default-uniform-block (es2gears) VS reads its bound MaterialColo
 test "ORACLE: a boolean VALUE from a comparison-and (the light-phong panic construct) selects correctly on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
     const glsl = @import("../../glsl.zig");
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 128;
     const H: u32 = 128;
@@ -3240,7 +3240,7 @@ test "ORACLE: the fast de-swizzle table equals blColorPixelOffset at every pixel
 // "speckle" cannot be reintroduced by the block-linear de-swizzle. Skips without a GPU.
 test "ORACLE: the block-linear de-swizzle faithfully reports the NVIDIA GPU output at speckle pixels (no readback-introduced holes) (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const w: u32 = 800;
     const h: u32 = 600;
@@ -3339,7 +3339,7 @@ test "ORACLE: the block-linear de-swizzle faithfully reports the NVIDIA GPU outp
 // interior is perfectly uniform. Any single off-color pixel is the speckle bug.
 test "ORACLE: block-linear de-swizzle is speckle-free at a non-tile-aligned 500x500 on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 500;
     const H: u32 = 500;
@@ -3383,7 +3383,7 @@ test "ORACLE: block-linear de-swizzle is speckle-free at a non-tile-aligned 500x
 test "ORACLE: GLES textured quad samples the 2x2 checkerboard in software-matching orientation on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -3606,7 +3606,7 @@ test "ORACLE-ARRAY-SHADOW-SASS: a sampler2DArrayShadow FS compiles to an Array2D
 test "ORACLE-SHADOW: a sampler2DShadow depth-compare TEX lights ref<=depth and shadows ref>depth on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -3738,7 +3738,7 @@ test "ORACLE-SHADOW-2PASS: PASS 1 RENDERS depth into a ZETA, the CE copies it in
     const CopyEngine = @import("ce.zig").CopyEngine;
     const Resource = @import("resource.zig").Resource;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const nv: *NvDevice = @ptrCast(@alignCast(dev.ptr));
     // 64x64: width*4 = 256 is GOB-row-aligned, so the CE detile lands tightly packed and the ZF32
@@ -3914,7 +3914,7 @@ test "ORACLE-SHADOW-2PASS: PASS 1 RENDERS depth into a ZETA, the CE copies it in
 test "ORACLE-CUBE-SHADOW: a samplerCubeShadow depth-compare TEX lights ref<=depth and shadows ref>depth on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4026,7 +4026,7 @@ test "ORACLE-CUBE-SHADOW: a samplerCubeShadow depth-compare TEX lights ref<=dept
 test "ORACLE-ARRAY-SHADOW: a sampler2DArrayShadow depth-compare TEX lights ref<=depth and shadows ref>depth on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4143,7 +4143,7 @@ test "ORACLE-CUBE-SHADOW-2PASS: PASS 1 RENDERS depth into 6 cube faces via ZETA+
     const CopyEngine = @import("ce.zig").CopyEngine;
     const Resource = @import("resource.zig").Resource;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const nv: *NvDevice = @ptrCast(@alignCast(dev.ptr));
     // 64x64 faces: width*4 = 256 is GOB-row-aligned, so the CE detile lands tightly packed and each
@@ -4332,7 +4332,7 @@ test "ORACLE-ARRAY-SHADOW-2PASS: PASS 1 RENDERS depth into 2 array layers via ZE
     const CopyEngine = @import("ce.zig").CopyEngine;
     const Resource = @import("resource.zig").Resource;
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const nv: *NvDevice = @ptrCast(@alignCast(dev.ptr));
     const W: u32 = 64;
@@ -4502,7 +4502,7 @@ test "ORACLE-GATHER: textureGather returns the 4 footprint texels of one compone
     const glsl = @import("../../glsl.zig");
     const sw_sampler = @import("../software/sampler.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4622,7 +4622,7 @@ test "ORACLE-FETCH: texelFetch returns the EXACT texel at integer coords on the 
     const glsl = @import("../../glsl.zig");
     const sw_sampler = @import("../software/sampler.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4714,7 +4714,7 @@ test "ORACLE-FETCH3: texelFetch on a sampler2DArray + sampler3D fetches the exac
     const glsl = @import("../../glsl.zig");
     const sw_sampler = @import("../software/sampler.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4825,7 +4825,7 @@ test "ORACLE-FETCH3: texelFetch on a sampler2DArray + sampler3D fetches the exac
 test "ORACLE-3D-TEX: a sampler3D LUT selects the right Z-slice by the w coordinate on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -4930,7 +4930,7 @@ test "ORACLE-3D-WITHIN-SLICE: a sampler3D with a 2x2 within-slice picks the righ
     // slice 0 (w~0.25) at the four quadrant (u,v) centers and assert each picks its own texel.
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -5039,7 +5039,7 @@ test "ORACLE-3D-LINEAR: a sampler3D LINEAR-filters WITHIN a slice (bilinear) AND
     // ~half (~64). Two draws (a fixed coord per draw), read the center pixel.
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -5145,7 +5145,7 @@ test "ORACLE-2DARRAY: a sampler2DArray selects a LAYER by a raw index AND reads 
     const glsl = @import("../../glsl.zig");
     const sw_sampler = @import("../software/sampler.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -5251,7 +5251,7 @@ test "ORACLE-2DARRAY: a sampler2DArray selects a LAYER by a raw index AND reads 
 test "ORACLE-CUBE-TEX: a samplerCube on the NVIDIA GPU selects the correct GL face AND within-face texel from the direction (cube lowered to a 6-face-wide 2D atlas), matching the software convention (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -5409,7 +5409,7 @@ test "ORACLE-CUBE-TEX: a samplerCube on the NVIDIA GPU selects the correct GL fa
 test "ORACLE-CUBE-SEAM: LINEAR sampling near a cube face edge does NOT bleed into the neighbouring face on the NVIDIA GPU (per-face clamp-to-edge via the atlas half-texel clamp) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -5498,7 +5498,7 @@ test "ORACLE-CUBE-SEAM: LINEAR sampling near a cube face edge does NOT bleed int
 test "ORACLE-2D-MIPMAP: implicit-LOD minification of a mipmapped 2D texture selects a higher mip on the NVIDIA GPU (fragment-stage derivatives work with deriv_mode = Auto on Blackwell) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -5593,7 +5593,7 @@ test "ORACLE-2D-MIPMAP: implicit-LOD minification of a mipmapped 2D texture sele
 test "ORACLE-BASE-LEVEL: GL_TEXTURE_BASE_LEVEL clamps the sampled mip on the NVIDIA GPU (TIC RES_VIEW_MIN_MIP_LEVEL) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -5698,7 +5698,7 @@ test "ORACLE-BASE-LEVEL: GL_TEXTURE_BASE_LEVEL clamps the sampled mip on the NVI
 test "ORACLE-SWIZZLE: GL_TEXTURE_SWIZZLE remaps sampled channels on the NVIDIA GPU (TIC X/Y/Z/W_SOURCE) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const vs_src =
@@ -5777,7 +5777,7 @@ test "ORACLE-SWIZZLE: GL_TEXTURE_SWIZZLE remaps sampled channels on the NVIDIA G
 test "ORACLE-LOD-BIAS: GL_TEXTURE_LOD_BIAS pushes the sampled mip coarser on the NVIDIA GPU (TSC MIP_LOD_BIAS) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const vs_src =
@@ -5862,7 +5862,7 @@ test "ORACLE-LOD-BIAS: GL_TEXTURE_LOD_BIAS pushes the sampled mip coarser on the
 test "ORACLE-ANISO: anisotropic filtering keeps a fine-axis mip on a grazing (v-compressed) surface on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -5954,7 +5954,7 @@ test "ORACLE-ANISO: anisotropic filtering keeps a fine-axis mip on a grazing (v-
 test "ORACLE-CUBE-MIP: textureCubeLod selects the requested cube mip level on the NVIDIA GPU (explicit LOD / TEX.LL over the 6-face atlas mip chain) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
 
@@ -6058,7 +6058,7 @@ test "ORACLE-CUBE-MIP: textureCubeLod selects the requested cube mip level on th
 test "ORACLE-FLOAT-RT-SAMPLE: a rendered rgba16f RT samples back its HDR value UNCLAMPED on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -6167,7 +6167,7 @@ test "ORACLE-FLOAT-RT-SAMPLE: a rendered rgba16f RT samples back its HDR value U
 test "ORACLE: a mipmapped texture minifies to a lower mip level on the NVIDIA GPU via HW implicit LOD (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -6295,7 +6295,7 @@ test "ORACLE: a mipmapped texture minifies to a lower mip level on the NVIDIA GP
 test "ORACLE: anisotropic filtering samples a sharper (lower) mip level than isotropic on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -6395,7 +6395,7 @@ test "ORACLE: anisotropic filtering samples a sharper (lower) mip level than iso
 test "ORACLE: sRGB + fp16 textures sample correctly on the NVIDIA GPU (TIC sRGB decode + FLOAT format) (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -6497,7 +6497,7 @@ test "ORACLE: sRGB + fp16 textures sample correctly on the NVIDIA GPU (TIC sRGB 
 test "ORACLE: GLES textured quad samples a 512x512 multi-GOB texture correctly on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 512;
     const H: u32 = 512;
@@ -6627,7 +6627,7 @@ test "ORACLE: GLES textured quad samples a 512x512 multi-GOB texture correctly o
 test "ORACLE: GLES textured quad with glmark2's 3-attribute (pos/normal/texcoord) layout samples correctly on the NVIDIA GPU (skips without a GPU)" {
     const glsl = @import("../../glsl.zig");
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 64;
     const H: u32 = 64;
@@ -6977,7 +6977,7 @@ fn mat4mul(a: [16]f32, b: [16]f32) [16]f32 {
 
 test "ORACLE: a lit indexed many-triangle SPHERE under a perspective MVP renders WATERTIGHT (no background-through-surface holes) on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256;
     const H: u32 = 256;
@@ -7161,7 +7161,7 @@ fn renderHorse(gpa: std.mem.Allocator, dev: hal.Device, w: u32, h: u32, mesh: Dr
 
 test "DROP-ORACLE: the REAL glmark2 build HORSE mesh renders with NO interior dropped-triangle holes vs the software golden on the NVIDIA GPU (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const W: u32 = 256; // pitchBytes(256)==256*4; software + nvidia readback coincide
     const H: u32 = 256;
@@ -7172,7 +7172,7 @@ test "DROP-ORACLE: the REAL glmark2 build HORSE mesh renders with NO interior dr
     defer gpa.free(mesh.verts);
     defer gpa.free(mesh.indices);
 
-    const sw = try SwDevice.create(gpa);
+    const sw = try SwDevice.create(gpa, std.testing.io);
     defer sw.deinit();
 
     // Sweep several rotations: the drop is view-dependent (a shared edge opens at

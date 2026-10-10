@@ -102,11 +102,12 @@ const Renderer = struct {
 fn buildRenderer(
     d: anytype,
     gpa: std.mem.Allocator,
+    io: std.Io,
     vs_spirv: []const u8,
     attributes: []const prism.glsl.AttributeMember,
     fs_spirv: []const u8,
 ) !Renderer {
-    const device = try d.createDevice(gpa);
+    const device = try d.createDevice(gpa, io);
     errdefer device.deinit();
 
     const vbuf = try device.createResource(.{ .buffer = .{ .size = @sizeOf(@TypeOf(tri)), .usage = .{ .vertex = true } } });
@@ -194,7 +195,7 @@ pub fn main(init: std.process.Init) !void {
     // lands on software.
     const renderer = for (prism.drivers.all) |d| {
         if (!d.isAvailable()) continue;
-        if (buildRenderer(d, gpa, cvs.spirv, cvs.attributes, fs_spirv)) |r| break r else |_| {}
+        if (buildRenderer(d, gpa, init.io, cvs.spirv, cvs.attributes, fs_spirv)) |r| break r else |_| {}
     } else return error.InitializationFailed;
     defer renderer.deinit();
     std.debug.print("triangle: display '{s}', driver '{s}'\n", .{ sel.name, renderer.driver_name });

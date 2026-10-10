@@ -120,27 +120,21 @@ pub const CopyEngine = struct {
         const semp: *volatile u32 = @ptrCast(@alignCast(self.sem.bytes.ptr));
         semp.* = 0;
         self.queue.submit(self.pbuf.va, s.dwords());
-        return waitFence(semp);
+        return waitFence(self.dev.io, semp);
     }
 
-    fn waitFence(semp: *volatile u32) hal.Error!void {
+    fn waitFence(io: std.Io, semp: *volatile u32) hal.Error!void {
         var spins: u64 = 0;
-        const start = nowNs();
+        const start = std.Io.Clock.now(.awake, io);
         while (true) {
             if (semp.* == FENCE) return;
             spins += 1;
             if (spins >= 8192) {
-                var req = std.os.linux.timespec{ .sec = 0, .nsec = 50_000 };
-                _ = std.os.linux.nanosleep(&req, null);
-                if (nowNs() - start > 5 * std.time.ns_per_s) return error.DeviceLost;
+                std.Io.sleep(io, .fromNanoseconds(50_000), .awake) catch {};
+                const elapsed = start.durationTo(std.Io.Clock.now(.awake, io));
+                if (elapsed.nanoseconds > 5 * std.time.ns_per_s) return error.DeviceLost;
             }
         }
-    }
-
-    fn nowNs() u64 {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     }
 
     pub fn deinit(self: *CopyEngine) void {
@@ -159,7 +153,7 @@ pub const CopyEngine = struct {
 
 test "nvidia CE detile of a block-linear RT == the CPU de-swizzle byte-for-byte (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const self: *NvDevice = @ptrCast(@alignCast(dev.ptr));
 

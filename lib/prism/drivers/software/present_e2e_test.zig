@@ -18,7 +18,7 @@ test "render triangle and present to headless surface" {
     defer platform_surface.deinit();
 
     // Create software device.
-    const device = try sw.driver.createDevice(gpa);
+    const device = try sw.driver.createDevice(gpa, std.testing.io);
     defer device.deinit();
 
     // Wrap platform surface into a HAL surface.

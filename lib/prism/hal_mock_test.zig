@@ -205,7 +205,8 @@ const MockDevice = struct {
     };
 };
 
-fn mockCreateDevice(ptr: *anyopaque, gpa: std.mem.Allocator) drv.Error!hal.Device {
+fn mockCreateDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) drv.Error!hal.Device {
+    _ = io;
     _ = ptr;
     const dev = gpa.create(MockDevice) catch return error.OutOfMemory;
     dev.* = .{ .gpa = gpa };
@@ -222,7 +223,7 @@ test "exportResource returns Unsupported when vtable slot is null" {
     const vt = drv.Driver.VTable{ .isAvailable = &mockAvailable, .createDevice = &mockCreateDevice };
     const driver = drv.Driver{ .name = "mock", .ptr = &state, .vtable = &vt };
 
-    const device = try driver.createDevice(gpa);
+    const device = try driver.createDevice(gpa, std.testing.io);
     defer device.deinit();
 
     const resource = try device.createResource(.{ .image = .{ .width = 4, .height = 4, .format = .rgba8_unorm, .usage = .{ .render_target = true, .scanout = true } } });
@@ -237,7 +238,7 @@ test "mock driver drives the full HAL chain end to end" {
     const vt = drv.Driver.VTable{ .isAvailable = &mockAvailable, .createDevice = &mockCreateDevice };
     const driver = drv.Driver{ .name = "mock", .ptr = &state, .vtable = &vt };
 
-    const device = try driver.createDevice(gpa);
+    const device = try driver.createDevice(gpa, std.testing.io);
     defer device.deinit();
 
     const target = try device.createResource(.{ .image = .{ .width = 8, .height = 8, .format = .rgba8_unorm, .usage = .{ .render_target = true } } });

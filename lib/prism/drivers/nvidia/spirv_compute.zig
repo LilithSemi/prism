@@ -137,7 +137,7 @@ pub fn runIntBinaryKernel(dev: *NvDevice, spirv_code: []const u8, x: i32, y: i32
 
 test "SPIR-V compute kernel (x*y - x) runs on the NVIDIA GPU as SASS (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = NvDevice.create(gpa) catch return error.SkipZigTest;
+    const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const self: *NvDevice = @ptrCast(@alignCast(dev.ptr));
 

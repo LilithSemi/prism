@@ -4,7 +4,7 @@ const shader = sw.shader;
 
 test "software driver rasterizes a triangle end to end" {
     const gpa = std.testing.allocator;
-    const device = try sw.driver.createDevice(gpa);
+    const device = try sw.driver.createDevice(gpa, std.testing.io);
     defer device.deinit();
 
     const W = 16;

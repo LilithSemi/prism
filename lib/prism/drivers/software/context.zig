@@ -1110,7 +1110,7 @@ test "real SPIR-V VS+FS draw: a channel-rotate fragment shader executes per frag
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
 
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
@@ -1276,7 +1276,7 @@ test "MSAA: a slanted triangle edge anti-aliases (partial-coverage resolve)" {
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const sw_shader = @import("shader.zig");
 
@@ -1442,7 +1442,7 @@ test "depth test: the nearer triangle occludes the farther one regardless of dra
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);
@@ -1637,7 +1637,7 @@ test "stencil test: a mask pass clips a later draw to only where the stencil was
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);
@@ -1755,7 +1755,7 @@ test "depth bias (glPolygonOffset): a negative constant offset lets a coplanar d
     defer gpa.free(vs_bytes);
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = vs_bytes });
     defer dev.destroyShaderModule(vs);
@@ -1879,7 +1879,7 @@ test "color write mask (glColorMask): masked channels keep the destination" {
     defer gpa.free(vs_bytes);
     const fs_bytes = try glsl.compileForStage(gpa, fs_src, .fragment);
     defer gpa.free(fs_bytes);
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = vs_bytes });
     defer dev.destroyShaderModule(vs);
@@ -2031,7 +2031,7 @@ test "vertex-pulling: a VS with gl_VertexIndex pulls its triangle from a UBO (no
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);
@@ -2197,7 +2197,7 @@ test "instancing: gl_InstanceIndex offsets each instance, drawInstanced renders 
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);
@@ -2360,7 +2360,7 @@ test "scissor: a scissor rect clips a fullscreen draw to the rect; null re-enabl
     const gpa = std.testing.allocator;
     const Device = @import("device.zig").Device;
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const prog = try buildFullscreenRedProgram(gpa, dev);
     defer dev.destroyShaderModule(prog.vs);
@@ -2413,7 +2413,7 @@ test "scissor: glClear honors an enabled scissor (clears only the sub-rect)" {
     const gpa = std.testing.allocator;
     const Device = @import("device.zig").Device;
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
 
     const W = 64;
@@ -2520,7 +2520,7 @@ test "push constant: an FS reads a vec4 push-constant block as its output color"
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);
@@ -2664,7 +2664,7 @@ test "push constant + UBO: an FS reads BOTH (param order = UBO binding 0, push-c
     try fsb.emit(gpa, op.Return, &.{});
     try fsb.emit(gpa, op.FunctionEnd, &.{});
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vsb.words.items) });
     defer dev.destroyShaderModule(vs);

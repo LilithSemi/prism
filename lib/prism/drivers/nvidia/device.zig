@@ -35,6 +35,7 @@ const VaAlloc = struct { va: u64, span: u64 };
 /// resource memory is recycled through `pool` rather than freed immediately.
 pub const Device = struct {
     gpa: std.mem.Allocator,
+    io: std.Io,
     client: nvidia.Client,
     dev: nvidia.Device,
     vaspace: u32,
@@ -79,10 +80,11 @@ pub const Device = struct {
     /// all device resources bindable from any context, so a cached capture context serves. Freed in deinit.
     tf_ctx: ?hal.Context = null,
 
-    pub fn create(gpa: std.mem.Allocator) hal.Error!hal.Device {
+    pub fn create(gpa: std.mem.Allocator, io: std.Io) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
         errdefer gpa.destroy(self);
         self.gpa = gpa;
+        self.io = io;
         self.next_va = 0x10000000;
         // gpa.create does not apply struct field defaults (see ce/detile_buf below), so
         // the VA free list must be initialized explicitly or it reads as garbage.
@@ -1144,7 +1146,7 @@ test {
 
 test "nvidia device creates and maps a GPU buffer resource (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const r = try dev.createResource(.{ .buffer = .{ .size = 256, .usage = .{ .vertex = true } } });
     defer dev.destroyResource(r);
@@ -1159,7 +1161,7 @@ test "nvidia device creates and maps a GPU buffer resource (skips without a GPU)
 
 test "nvidia device creates a sampled texture (block-linear + linear staging) (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     // A combined-image-sampler source: sampled (no render_target). The nvidia driver
     // backs it with block-linear VRAM (the TIC describes block-linear) + a linear CPU
@@ -1183,7 +1185,7 @@ test "nvidia device creates a sampled texture (block-linear + linear staging) (s
 
 test "nvidia createResource recycles freed sysmem buffers (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     // The sysmem pool recycles buffers/staging allocations (color render targets
     // are now block-linear VRAM and freed directly, not pooled; they must be
@@ -1203,7 +1205,7 @@ test "nvidia readbackPresent (CE path) matches the CPU de-swizzle at 800x600 rgb
     // at the glmark2 window size, read back through the copy-engine present path. The
     // CE output (XRGB) must equal the CPU de-swizzle present (present_bgrx) byte-for-byte.
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const self: *Device = @ptrCast(@alignCast(dev.ptr));
     const W: u32 = 800;
@@ -1245,7 +1247,7 @@ test "nvidia readbackPresent (CE path) matches the CPU de-swizzle at 800x600 rgb
 
 test "nvidia device VA allocator keeps next_va bounded across resource churn (skips without a GPU)" {
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     const self: *Device = @ptrCast(@alignCast(dev.ptr));
     // A long-lived device like a UI framework creates and destroys GPU surfaces for as
@@ -1263,10 +1265,7 @@ test "nvidia device VA allocator keeps next_va bounded across resource churn (sk
         // submitting frames between surface swaps, giving the kernel time to drain. This
         // test does no GPU work, so a tight alloc/free burst outruns reclaim and trips
         // NV_ERR_INSUFFICIENT_RESOURCES. Yield now and then to match real pacing.
-        if (i % 32 == 31) {
-            var ts = std.os.linux.timespec{ .sec = 0, .nsec = 2_000_000 };
-            _ = std.os.linux.nanosleep(&ts, &ts);
-        }
+        if (i % 32 == 31) std.Io.sleep(self.io, .fromNanoseconds(2_000_000), .awake) catch {};
     }
     // 400 RTs at ~2 MB each is ~800 MB of churn. Recycling keeps the bump pointer within a
     // few slots of where it started. Without it next_va would sit ~800 MB higher.
@@ -1277,7 +1276,7 @@ test "nvidia exportResource returns a real dma-buf fd for a block-linear color R
     // Proves the full CE-detile -> linear .system buffer -> nvidia.memToDmaBuf pipeline.
     // Acceptance gate: readlink /proc/self/fd/<fd> MUST contain "dmabuf".
     const gpa = std.testing.allocator;
-    const dev = Device.create(gpa) catch return error.SkipZigTest;
+    const dev = Device.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
 
     // A 64x64 block-linear rgba8_unorm render target.

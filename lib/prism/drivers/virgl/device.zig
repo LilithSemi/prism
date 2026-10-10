@@ -63,6 +63,7 @@ const Surface = struct {
 
 pub const Device = struct {
     gpa: std.mem.Allocator,
+    io: std.Io,
     transport: Transport,
     stream: [1024]u32 = undefined,
 
@@ -70,10 +71,10 @@ pub const Device = struct {
     /// construction argument (freestanding: the live Conduit `*Virtio` + DMA
     /// stream scratch. Linux: an optional render-node path). The device owns its
     /// 3D context, created lazily by the transport on first use.
-    pub fn create(gpa: std.mem.Allocator, args: InitArgs) hal.Error!hal.Device {
+    pub fn create(gpa: std.mem.Allocator, io: std.Io, args: InitArgs) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .transport = Transport.init(gpa, args) catch return error.InitializationFailed };
+        self.* = .{ .gpa = gpa, .io = io, .transport = Transport.init(gpa, args) catch return error.InitializationFailed };
         return .{ .ptr = self, .vtable = &vtable };
     }
 

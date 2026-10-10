@@ -20,9 +20,9 @@ fn available(ptr: *anyopaque) bool {
     client.deinit();
     return true;
 }
-fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator) Error!Device {
+fn createDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) Error!Device {
     _ = ptr;
-    return NvDevice.create(gpa);
+    return NvDevice.create(gpa, io);
 }
 
 const vtable = Driver.VTable{ .isAvailable = &available, .createDevice = &createDevice };
@@ -34,7 +34,7 @@ test "nvidia driver exposes its name and a real device path" {
     // Availability and device creation both need real hardware. Exercise the
     // full path when a GPU is present, otherwise just confirm it reports absent.
     if (driver.isAvailable()) {
-        const dev = try driver.createDevice(std.testing.allocator);
+        const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     }
 }

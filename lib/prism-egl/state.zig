@@ -1089,9 +1089,9 @@ pub fn initialize(d: *Display) prism.Error!void {
     if (std.c.getenv("PRISM_NOQUAD") != null) prism.drivers.software.pipeline.disable_quad_diag = true; // DIAG: scalar FS only
     if (pinned_driver) |name| {
         const drv = prism.drivers.select(name) orelse return error.InitializationFailed;
-        d.device = try drv.createDevice(gpa);
+        d.device = try drv.createDevice(gpa, prism.hal.defaultIo());
     } else {
-        const sel = prism.drivers.createBestDevice(gpa) orelse return error.InitializationFailed;
+        const sel = prism.drivers.createBestDevice(gpa, prism.hal.defaultIo()) orelse return error.InitializationFailed;
         d.device = sel.device;
     }
     d.initialized = true;

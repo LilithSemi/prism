@@ -55,10 +55,11 @@ fn runGrid(comptime n: usize, compiled: anytype, total: u64, bases: []const [*]u
 
 pub const Device = struct {
     gpa: std.mem.Allocator,
+    io: std.Io,
 
-    pub fn create(gpa: std.mem.Allocator) hal.Error!hal.Device {
+    pub fn create(gpa: std.mem.Allocator, io: std.Io) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
-        self.* = .{ .gpa = gpa };
+        self.* = .{ .gpa = gpa, .io = io };
         return .{ .ptr = self, .vtable = &vtable };
     }
 
@@ -262,7 +263,7 @@ pub const Device = struct {
 
 test "software device allocates and maps a resource" {
     const gpa = std.testing.allocator;
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
     const r = try dev.createResource(.{ .image = .{ .width = 2, .height = 2, .format = .rgba8_unorm } });
     defer dev.destroyResource(r);
@@ -313,7 +314,7 @@ test "software compute dispatch: output[i] = input[i] + 0x100 over a grid" {
 
     const spv = std.mem.sliceAsBytes(b.words.items);
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
 
     const shader = try dev.createShaderModule(.{ .stage = .compute, .code = spv });

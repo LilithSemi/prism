@@ -3709,22 +3709,16 @@ test "perf bench: nvidia per-draw cost" {
         glDrawArrays(gles.GL_TRIANGLES, 0, 3);
         if ((i + 1) % 50 == 0) glFinish();
     }
-    const nowNs = struct {
-        fn mono() i128 {
-            var ts: std.os.linux.timespec = undefined;
-            _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-            return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
-        }
-    }.mono;
+    const io = std.testing.io;
     const N = 500;
     const FRAME = 50; // simulate 50-draw frames: glFinish flushes at each boundary (a swap would too)
-    const t0 = nowNs();
+    const t0 = std.Io.Clock.now(.awake, io);
     i = 0;
     while (i < N) : (i += 1) {
         glDrawArrays(gles.GL_TRIANGLES, 0, 3);
         if ((i + 1) % FRAME == 0) glFinish(); // frame boundary: batched -> one submit per frame
     }
-    const ns: f64 = @floatFromInt(nowNs() - t0);
+    const ns: f64 = @floatFromInt(t0.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
     std.debug.print("\n[PERF] {} draws ({}-draw frames) in {d:.2} ms = {d:.1} us/draw = {d:.0} draws/s\n", .{ N, FRAME, ns / 1e6, ns / @as(f64, N) / 1e3, @as(f64, N) * 1e9 / ns });
     glDeleteProgram(prog);
 }

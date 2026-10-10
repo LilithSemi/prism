@@ -22,14 +22,6 @@ fn benchEnabled() bool {
     return getEnv("PRISM_BENCH") != null;
 }
 
-/// Monotonic nanosecond clock via the raw linux syscall (this test binary may not
-/// link libc, and std.time.Timer is unavailable in this std build).
-fn nowNs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-}
-
 fn wf(buf: []u8, off: usize, v: f32) void {
     @memcpy(buf[off..][0..4], &std.mem.toBytes(v));
 }
@@ -116,7 +108,7 @@ fn runWorkload(gpa: std.mem.Allocator, name: []const u8, dim: usize, frames: usi
     const vs_code = try buildVs(gpa);
     defer gpa.free(vs_code);
 
-    const dev = try Device.create(gpa);
+    const dev = try Device.create(gpa, std.testing.io);
     defer dev.deinit();
 
     const vs = try dev.createShaderModule(.{ .stage = .vertex, .code = std.mem.sliceAsBytes(vs_code) });
@@ -193,7 +185,8 @@ fn runWorkload(gpa: std.mem.Allocator, name: []const u8, dim: usize, frames: usi
         try ctx.submit(cb);
     }
 
-    const t0 = nowNs();
+    const io = std.testing.io;
+    const t0 = std.Io.Clock.now(.awake, io);
     var f: usize = 0;
     while (f < frames) : (f += 1) {
         const cb = try ctx.beginCommands();
@@ -205,7 +198,7 @@ fn runWorkload(gpa: std.mem.Allocator, name: []const u8, dim: usize, frames: usi
         try cb.draw(3, 0);
         try ctx.submit(cb);
     }
-    const ns = nowNs() - t0;
+    const ns: u64 = @intCast(t0.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
 
     const ms_total = @as(f64, @floatFromInt(ns)) / 1.0e6;
     const ms_frame = ms_total / @as(f64, @floatFromInt(frames));
