@@ -9,6 +9,7 @@ pub const CommandBuffer = hal.CommandBuffer;
 pub const Resource = hal.Resource;
 pub const ShaderModule = hal.ShaderModule;
 pub const Pipeline = hal.Pipeline;
+pub const Surface = hal.Surface;
 pub const Error = @import("prism/error.zig").Error;
 
 pub const platform = @import("prism/platform.zig");

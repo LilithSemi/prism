@@ -9,8 +9,8 @@ pub fn build(b: *std.Build) void {
     // -Ddrivers selects which drivers are compiled in, passed to the code as
     // per-driver comptime flags in build_options. lib/prism/drivers.zig builds its
     // list from them. An unselected driver's source is never analyzed.
-    const known_drivers = [_][]const u8{ "software", "apple", "nvidia", "virgl" };
-    const drivers_opt = b.option([]const u8, "drivers", "Comma-separated drivers to compile in") orelse "software,apple,nvidia,virgl";
+    const known_drivers = [_][]const u8{ "software", "apple", "nvidia", "virgl", "vulkan" };
+    const drivers_opt = b.option([]const u8, "drivers", "Comma-separated drivers to compile in") orelse "software,apple,nvidia,virgl,vulkan";
     var enabled = std.StringHashMap(void).init(b.allocator);
     {
         var it = std.mem.splitScalar(u8, drivers_opt, ',');
@@ -39,6 +39,14 @@ pub fn build(b: *std.Build) void {
     const drm_dep = b.dependency("drm", .{ .target = target, .optimize = optimize });
     const gbm_dep = b.dependency("gbm", .{ .target = target, .optimize = optimize });
 
+    const vulkan_headers_dep = b.dependency("vulkan_headers", .{});
+    const vulkan_zig_dep = b.dependency("vulkan_zig", .{});
+    const vulkan_zig_generate = b.addRunArtifact(vulkan_zig_dep.artifact("vulkan-zig-generator"));
+    vulkan_zig_generate.addFileArg(vulkan_headers_dep.path("registry/vk.xml"));
+    const vulkan_zig = b.createModule(.{
+        .root_source_file = vulkan_zig_generate.addOutputFileArg("vk.zig"),
+    });
+
     const prism = b.addModule("prism", .{
         .root_source_file = b.path("lib/prism.zig"),
         .target = target,
@@ -55,8 +63,12 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vulcan-spirv", .module = vulcan_dep.module("vulcan-spirv") },
             .{ .name = "vulcan-target", .module = vulcan_dep.module("vulcan-target") },
             .{ .name = "vulcan-glsl", .module = vulcan_dep.module("vulcan-glsl") },
+            .{ .name = "vulkan-zig", .module = vulkan_zig },
         },
     });
+    if (target.result.abi.isAndroid()) {
+        prism.linkSystemLibrary("vulkan", .{});
+    }
 
     const linkage = b.option(std.builtin.LinkMode, "linkage", "Core library linkage") orelse .dynamic;
     b.installArtifact(b.addLibrary(.{ .name = "prism", .root_module = prism, .linkage = linkage }));
@@ -69,7 +81,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = prism, .filters = test_filters })).step);
 
     // The GLX vendor, EGL/GLVND vendor, and Vulkan ICD shared libraries.
-    if (!target.result.cpu.arch.isWasm() and target.result.os.tag != .uefi) {
+    if (!target.result.cpu.arch.isWasm() and target.result.os.tag != .uefi and !target.result.abi.isAndroid()) {
         // The EGL vendor and the Vulkan ICD present over Wayland and link the
         // system libwayland-client, which exists only on Linux. The GLX vendor
         // speaks X11 and needs no wayland, so it keeps the wider gate. The CI's
@@ -113,7 +125,7 @@ pub fn build(b: *std.Build) void {
     // prism-info probes hardware through the platform backends, and the Wayland
     // one pulls the wayland client's Linux-only syscall layer into analysis on
     // darwin. The tool has no darwin consumer: lattice uses the prism module.
-    if (target.result.os.tag == .linux) {
+    if (target.result.os.tag == .linux and !target.result.abi.isAndroid()) {
         const info_mod = b.createModule(.{
             .root_source_file = b.path("tools/prism-info.zig"),
             .target = target,
@@ -128,7 +140,7 @@ pub fn build(b: *std.Build) void {
 
     // Triangle example: best available driver with a software fallback, presented
     // over Wayland. Wayland presentation is Linux-only, so the example is too.
-    if (target.result.os.tag == .linux) {
+    if (target.result.os.tag == .linux and !target.result.abi.isAndroid()) {
         const triangle_mod = b.createModule(.{
             .root_source_file = b.path("examples/triangle.zig"),
             .target = target,
@@ -143,7 +155,7 @@ pub fn build(b: *std.Build) void {
     // Render the loader/vendor JSON templates, replacing @LIBDIR@ with the install lib dir.
     // They describe the Vulkan ICD and the EGL vendor library, both Linux-only. The install
     // prefix is known only while the install step runs, so the substitution runs there too.
-    if (target.result.os.tag == .linux) {
+    if (target.result.os.tag == .linux and !target.result.abi.isAndroid()) {
         inline for (.{
             .{ "data/vulkan/icd.d/prism.json.in", "share/vulkan/icd.d/prism.json" },
             .{ "data/glvnd/egl_vendor.d/50_prism.json.in", "share/glvnd/egl_vendor.d/50_prism.json" },

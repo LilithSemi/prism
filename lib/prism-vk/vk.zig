@@ -1506,7 +1506,7 @@ test "version helper packs like VK_MAKE_API_VERSION" {
 }
 
 test "result codes match the spec" {
-    try std.testing.expectEqual(@as(i32, 0), @intFromEnum(VkResult.VK_SUCCESS));
-    try std.testing.expectEqual(@as(i32, 5), @intFromEnum(VkResult.VK_INCOMPLETE));
-    try std.testing.expectEqual(@as(i32, -3), @intFromEnum(VkResult.VK_ERROR_INITIALIZATION_FAILED));
+    try std.testing.expectEqual(@as(i32, 0), @backingInt(VkResult.VK_SUCCESS));
+    try std.testing.expectEqual(@as(i32, 5), @backingInt(VkResult.VK_INCOMPLETE));
+    try std.testing.expectEqual(@as(i32, -3), @backingInt(VkResult.VK_ERROR_INITIALIZATION_FAILED));
 }

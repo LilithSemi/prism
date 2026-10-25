@@ -289,22 +289,46 @@ fn ndcToScreen(x: f32, y: f32, width: u32, height: u32) [2]f32 {
     return .{ (x * 0.5 + 0.5) * w, (1.0 - (y * 0.5 + 0.5)) * h };
 }
 
+/// Clip floating-point bounds before converting them to pixel coordinates. A
+/// triangle entirely above or left of the target has a negative maximum; a
+/// direct conversion of that value to u32 is a checked panic.
+fn triangleBounds(p0: [2]f32, p1: [2]f32, p2: [2]f32, width: u32, height: u32) ?[4]u32 {
+    if (width == 0 or height == 0) return null;
+    for (p0 ++ p1 ++ p2) |value| if (!std.math.isFinite(value)) return null;
+
+    const raw_min_x = @floor(@min(p0[0], @min(p1[0], p2[0])));
+    const raw_max_x = @ceil(@max(p0[0], @max(p1[0], p2[0])));
+    const raw_min_y = @floor(@min(p0[1], @min(p1[1], p2[1])));
+    const raw_max_y = @ceil(@max(p0[1], @max(p1[1], p2[1])));
+    const last_x: f32 = @floatFromInt(width - 1);
+    const last_y: f32 = @floatFromInt(height - 1);
+    if (raw_max_x < 0 or raw_max_y < 0 or raw_min_x > last_x or raw_min_y > last_y) return null;
+
+    return .{
+        @intFromFloat(std.math.clamp(raw_min_x, 0, last_x)),
+        @intFromFloat(std.math.clamp(raw_max_x, 0, last_x)),
+        @intFromFloat(std.math.clamp(raw_min_y, 0, last_y)),
+        @intFromFloat(std.math.clamp(raw_max_y, 0, last_y)),
+    };
+}
+
 pub fn drawTriangle(pixels: []u8, width: u32, height: u32, verts: [3]Vertex) void {
     if (width == 0 or height == 0) return;
     const p0 = ndcToScreen(verts[0].x, verts[0].y, width, height);
     const p1 = ndcToScreen(verts[1].x, verts[1].y, width, height);
     const p2 = ndcToScreen(verts[2].x, verts[2].y, width, height);
 
+    const bounds = triangleBounds(p0, p1, p2, width, height) orelse return;
     var area = edge(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]);
-    if (area == 0) return;
+    if (!std.math.isFinite(area) or area == 0) return;
     // Normalize so the interior test uses >= 0 regardless of winding.
     const sign: f32 = if (area < 0) -1.0 else 1.0;
     area *= sign;
 
-    const minx: u32 = @intFromFloat(@max(0.0, @floor(@min(p0[0], @min(p1[0], p2[0])))));
-    const maxx: u32 = @intFromFloat(@min(@as(f32, @floatFromInt(width - 1)), @ceil(@max(p0[0], @max(p1[0], p2[0])))));
-    const miny: u32 = @intFromFloat(@max(0.0, @floor(@min(p0[1], @min(p1[1], p2[1])))));
-    const maxy: u32 = @intFromFloat(@min(@as(f32, @floatFromInt(height - 1)), @ceil(@max(p0[1], @max(p1[1], p2[1])))));
+    const minx = bounds[0];
+    const maxx = bounds[1];
+    const miny = bounds[2];
+    const maxy = bounds[3];
 
     var y: u32 = miny;
     while (y <= maxy) : (y += 1) {
@@ -667,8 +691,9 @@ pub fn rasterShadedFmt(
     const p1 = screen[1];
     const p2 = screen[2];
 
+    const bounds = triangleBounds(p0, p1, p2, width, height) orelse return;
     var area = edge(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]);
-    if (area == 0) return;
+    if (!std.math.isFinite(area) or area == 0) return;
     const sign: f32 = if (area < 0) -1.0 else 1.0;
     area *= sign;
 
@@ -697,10 +722,10 @@ pub fn rasterShadedFmt(
         }
     }
 
-    var minx: u32 = @intFromFloat(@max(0.0, @floor(@min(p0[0], @min(p1[0], p2[0])))));
-    var maxx: u32 = @intFromFloat(@min(@as(f32, @floatFromInt(width - 1)), @ceil(@max(p0[0], @max(p1[0], p2[0])))));
-    var miny: u32 = @intFromFloat(@max(0.0, @floor(@min(p0[1], @min(p1[1], p2[1])))));
-    var maxy: u32 = @intFromFloat(@min(@as(f32, @floatFromInt(height - 1)), @ceil(@max(p0[1], @max(p1[1], p2[1])))));
+    var minx = bounds[0];
+    var maxx = bounds[1];
+    var miny = bounds[2];
+    var maxy = bounds[3];
 
     // Scissor: intersect the triangle's bounding box with the scissor rect (framebuffer
     // pixels, top-left origin). Every downstream path (scalar, 2x2 quad, MSAA) iterates
@@ -1425,6 +1450,13 @@ test "triangle covers the center pixel and interpolates" {
     try std.testing.expectEqual(@as(u8, 255), px[idx + 0]); // center is inside -> white
     // A top corner pixel is outside the triangle -> untouched (0)
     try std.testing.expectEqual(@as(u8, 0), px[(0 * W + 0) * 4 + 0]);
+}
+
+test "triangle bounds reject fully offscreen and non-finite geometry" {
+    try std.testing.expect(triangleBounds(.{ -20, 2 }, .{ -10, 2 }, .{ -15, 8 }, 16, 16) == null);
+    try std.testing.expect(triangleBounds(.{ 2, -20 }, .{ 8, -15 }, .{ 2, -10 }, 16, 16) == null);
+    try std.testing.expect(triangleBounds(.{ std.math.nan(f32), 0 }, .{ 1, 0 }, .{ 0, 1 }, 16, 16) == null);
+    try std.testing.expectEqual([4]u32{ 0, 5, 0, 6 }, triangleBounds(.{ -4, -3 }, .{ 5, 1 }, .{ 2, 6 }, 16, 16).?);
 }
 
 test "float render-target pack/unpack roundtrips within precision" {

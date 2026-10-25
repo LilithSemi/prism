@@ -15,14 +15,19 @@ fn buildAll() []const Driver {
     // which is what the aarch64-darwin CI hit in the headless-backend tests.
     // The OS gate keeps that code comptime-dead off Linux: not analyzed, not
     // probed, and the software rasterizer is the universal fallback.
-    const on_linux = builtin.os.tag == .linux;
+    const on_android = builtin.abi.isAndroid();
+    const on_linux = builtin.os.tag == .linux and !on_android;
+    const vk_list: []const Driver = if (build_options.driver_vulkan and on_android)
+        &[_]Driver{@import("drivers/vulkan.zig").driver}
+    else
+        &.{};
     const sw_list: []const Driver = if (build_options.driver_software) &[_]Driver{@import("drivers/software.zig").driver} else &.{};
     const ap_list: []const Driver = if (build_options.driver_apple and on_linux and builtin.cpu.arch == .aarch64) &[_]Driver{@import("drivers/apple.zig").driver} else &.{};
     const nv_list: []const Driver = if (build_options.driver_nvidia and on_linux) &[_]Driver{@import("drivers/nvidia.zig").driver} else &.{};
     const vg_list: []const Driver = if (build_options.driver_virgl and on_linux) &[_]Driver{@import("drivers/virgl.zig").driver} else &.{};
     // Auto-selection preference order: real hardware drivers first, the software
     // rasterizer last as the universal fallback.
-    return ap_list ++ nv_list ++ vg_list ++ sw_list;
+    return vk_list ++ ap_list ++ nv_list ++ vg_list ++ sw_list;
 }
 
 pub const all: []const Driver = buildAll();

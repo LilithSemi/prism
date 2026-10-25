@@ -31,6 +31,14 @@
             .url = "git+https://git.lilithsemi.com/LilithSemi/nvidia.zig#c8cb9f94fd8a3ce2b1added981bc1aff33be4f64",
             .hash = "nvidia-0.1.0-nX_09_EODACTjQ0rgOrWL9kkUs2WJhusYQOo4DaJc-N7",
         },
+        .vulkan_zig = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig?ref=zig-0.17-compat#1fa628fd49d89468241c2cab14bad41a312e79fc",
+            .hash = "vulkan-0.0.0-r7Ytxy2BAwCPqBJUCXp6XXMwWqFD3DNrMLWWQvRRSXOC",
+        },
+        .vulkan_headers = .{
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#73814d006638aa00bd553215b054f0f02e457e22",
+            .hash = "N-V-__8AAFOXiQJm2niapwlfcDuQxKKSbS6BJkr-Yud5uZGS",
+        },
     },
     .paths = .{
         "build.zig",
