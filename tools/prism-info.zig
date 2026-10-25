@@ -119,7 +119,7 @@ fn printDrm(out: anytype) !void {
         // modeset; opening the node read-only only confirms it exists. Close it
         // right back. (Mirrors how platform/drm.zig opens the node, minus RDWR.)
         const rc = linux.open(path.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
-        if (std.posix.errno(rc) != .SUCCESS) continue;
+        if (linux.errno(rc) != .SUCCESS) continue;
         _ = linux.close(@intCast(rc));
         const name = std.fmt.bufPrint(&name_store[found_n], "card{d}", .{i}) catch continue;
         found[found_n] = name;

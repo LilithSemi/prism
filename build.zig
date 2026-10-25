@@ -1,16 +1,35 @@
 const std = @import("std");
 
+fn supportsVulkan(target: std.Target) bool {
+    return target.abi.isAndroid() or switch (target.os.tag) {
+        .linux, .macos, .windows => true,
+        else => false,
+    };
+}
+
+pub fn defaultDrivers(target: std.Target) []const u8 {
+    if (target.abi.isAndroid()) return "vulkan";
+    if (target.os.tag == .linux) return "software,apple,nvidia,virgl";
+    return "software";
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version = b.option([]const u8, "version", "Prism version string") orelse "0.0.0-dev";
+    const version = b.option([]const u8, "version", "Prism version string") orelse @import("build.zig.zon").version;
 
     // -Ddrivers selects which drivers are compiled in, passed to the code as
     // per-driver comptime flags in build_options. lib/prism/drivers.zig builds its
     // list from them. An unselected driver's source is never analyzed.
-    const known_drivers = [_][]const u8{ "software", "apple", "nvidia", "virgl", "vulkan" };
-    const drivers_opt = b.option([]const u8, "drivers", "Comma-separated drivers to compile in") orelse "software,apple,nvidia,virgl,vulkan";
+    const known_drivers = [_][]const u8{
+        "software",
+        "apple",
+        "nvidia",
+        "virgl",
+        "vulkan",
+    };
+    const drivers_opt = b.option([]const u8, "drivers", "Comma-separated drivers to compile in") orelse defaultDrivers(target.result);
     var enabled = std.StringHashMap(void).init(b.allocator);
     {
         var it = std.mem.splitScalar(u8, drivers_opt, ',');
@@ -66,8 +85,20 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vulkan-zig", .module = vulkan_zig },
         },
     });
-    if (target.result.abi.isAndroid()) {
-        prism.linkSystemLibrary("vulkan", .{});
+    if (enabled.contains("vulkan")) {
+        // The Vulkan loader uses the platform C runtime internally. Declaring
+        // libc here ensures Zig executables importing prism use the libc-aware
+        // startup path before the loader calls malloc/calloc.
+        prism.link_libc = true;
+        if (target.result.abi.isAndroid()) {
+            // Android supplies its Vulkan loader as a platform library; there is
+            // no target pkg-config environment to consult.
+            prism.linkSystemLibrary("vulkan", .{ .use_pkg_config = .no });
+        } else if (supportsVulkan(target.result)) {
+            // Vulkan is opt-in on desktop targets because this is Prism's one
+            // driver that depends on a non-Zig system package.
+            prism.linkSystemLibrary("vulkan", .{ .use_pkg_config = .force });
+        }
     }
 
     const linkage = b.option(std.builtin.LinkMode, "linkage", "Core library linkage") orelse .dynamic;

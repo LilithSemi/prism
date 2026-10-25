@@ -17,7 +17,11 @@ fn buildAll() []const Driver {
     // probed, and the software rasterizer is the universal fallback.
     const on_android = builtin.abi.isAndroid();
     const on_linux = builtin.os.tag == .linux and !on_android;
-    const vk_list: []const Driver = if (build_options.driver_vulkan and on_android)
+    const supports_vulkan = on_android or switch (builtin.os.tag) {
+        .linux, .macos, .windows => true,
+        else => false,
+    };
+    const vk_list: []const Driver = if (build_options.driver_vulkan and supports_vulkan)
         &[_]Driver{@import("drivers/vulkan.zig").driver}
     else
         &.{};

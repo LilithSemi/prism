@@ -302,7 +302,7 @@ const DrmDisplay = struct {
         const md = self.node.mapDumb(cd.handle) catch return error.DeviceLost;
 
         const r = linux.mmap(null, cd.size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.node.fd, @intCast(md.offset));
-        if (std.posix.errno(r) != .SUCCESS) return error.DeviceLost;
+        if (linux.errno(r) != .SUCCESS) return error.DeviceLost;
         const ptr: [*]u8 = @ptrFromInt(r);
         const bytes = ptr[0..cd.size];
         @memset(bytes, 0);
@@ -338,8 +338,8 @@ pub fn createNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!platform.D
     var zbuf: [80]u8 = undefined;
     const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-    if (std.posix.errno(ofd) != .SUCCESS) {
-        dbg(.{}, "open card0", std.posix.errno(ofd));
+    if (linux.errno(ofd) != .SUCCESS) {
+        dbg(.{}, "open card0", linux.errno(ofd));
         return error.InitializationFailed;
     }
     const node = drm.Node{ .allocator = gpa, .fd = @intCast(ofd) };
@@ -871,8 +871,8 @@ pub fn createGpuScanoutNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!
     var zbuf: [80]u8 = undefined;
     const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-    if (std.posix.errno(ofd) != .SUCCESS) {
-        dbg(.{}, "open card0 (gpu scanout)", std.posix.errno(ofd));
+    if (linux.errno(ofd) != .SUCCESS) {
+        dbg(.{}, "open card0 (gpu scanout)", linux.errno(ofd));
         return error.InitializationFailed;
     }
     const node = drm.Node{ .allocator = gpa, .fd = @intCast(ofd) };
@@ -1030,7 +1030,7 @@ pub const HdrDisplay = struct {
     fn mapDumb(self: *HdrDisplay, handle: u32, sz: u64) hal.Error![]u8 {
         const md = self.node.mapDumb(handle) catch return error.DeviceLost;
         const r = linux.mmap(null, sz, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.node.fd, @intCast(md.offset));
-        if (std.posix.errno(r) != .SUCCESS) return error.DeviceLost;
+        if (linux.errno(r) != .SUCCESS) return error.DeviceLost;
         const ptr: [*]u8 = @ptrFromInt(r);
         return ptr[0..sz];
     }
@@ -1102,8 +1102,8 @@ pub fn createHdrDisplayNode(gpa: std.mem.Allocator, path: []const u8) hal.Error!
     var zbuf: [80]u8 = undefined;
     const z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{path}, 0) catch return error.InvalidArgument;
     const ofd = linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-    if (std.posix.errno(ofd) != .SUCCESS) {
-        dbg(.{}, "open card0 (hdr)", std.posix.errno(ofd));
+    if (linux.errno(ofd) != .SUCCESS) {
+        dbg(.{}, "open card0 (hdr)", linux.errno(ofd));
         return error.InitializationFailed;
     }
     const node = drm.Node{ .allocator = gpa, .fd = @intCast(ofd) };

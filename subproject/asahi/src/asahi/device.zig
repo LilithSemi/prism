@@ -145,7 +145,7 @@ pub const Device = struct {
         var buf: [128]u8 = undefined;
         const z = std.mem.printSentinel(&buf, "{s}", .{path}, 0) catch return error.OpenFailed;
         const rc = std.os.linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-        switch (std.posix.errno(rc)) {
+        switch (std.os.linux.errno(rc)) {
             .SUCCESS => return .{ .fd = @intCast(rc) },
             else => return error.OpenFailed,
         }
@@ -163,7 +163,7 @@ pub const Device = struct {
 
     fn ioctl(self: *Device, request: u32, arg: usize) Error!void {
         const rc = std.os.linux.ioctl(self.fd, request, arg);
-        const e = std.posix.errno(rc);
+        const e = std.os.linux.errno(rc);
         switch (e) {
             .SUCCESS => {},
             else => {
@@ -262,7 +262,7 @@ pub const Device = struct {
             self.fd,
             @intCast(mo.offset),
         );
-        switch (std.posix.errno(r)) {
+        switch (std.os.linux.errno(r)) {
             .SUCCESS => {},
             else => return error.MapFailed,
         }
@@ -428,7 +428,7 @@ pub const Device = struct {
             .deadline_nsec = 0,
         };
         const rc = std.os.linux.ioctl(self.fd, uapi.IOCTL_SYNCOBJ_WAIT, @intFromPtr(&w));
-        const e = std.posix.errno(rc);
+        const e = std.os.linux.errno(rc);
         switch (e) {
             .SUCCESS => {},
             .TIME => return error.Timeout,

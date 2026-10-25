@@ -63,6 +63,8 @@
               (
                 [
                   zig_0_17
+                  pkg-config
+                  vulkan-loader
                 ]
                 ++ lib.optionals (stdenv.hostPlatform.isLinux) [
                   pkg-config

@@ -1,8 +1,7 @@
 //! Vulkan HAL driver entry point.
 //!
-//! Android guarantees a Vulkan loader from API 24 and is the first supported
-//! host. Platform selection stays here so the same driver can use a desktop
-//! Vulkan loader when a host surface implementation is added.
+//! Android guarantees a Vulkan loader from API 24. Linux, macOS, and Windows
+//! builds can opt into a system Vulkan loader; presentation remains Android-only.
 const std = @import("std");
 const builtin = @import("builtin");
 const drv = @import("../driver.zig");
@@ -12,13 +11,18 @@ const Device = @import("vulkan/device.zig").Device;
 const State = struct {};
 var state: State = .{};
 
+const supported = builtin.abi.isAndroid() or switch (builtin.os.tag) {
+    .linux, .macos, .windows => true,
+    else => false,
+};
+
 fn available(_: *anyopaque) bool {
-    return builtin.abi.isAndroid();
+    return supported;
 }
 
 fn createDevice(_: *anyopaque, gpa: std.mem.Allocator, io: std.Io) drv.Error!hal.Device {
     _ = io;
-    if (!builtin.abi.isAndroid()) return error.Unsupported;
+    if (!supported) return error.Unsupported;
     return Device.create(gpa);
 }
 
@@ -33,6 +37,6 @@ pub const driver = drv.Driver{
     .vtable = &vtable,
 };
 
-test "Android Vulkan driver is unavailable on a host test build" {
-    if (!builtin.abi.isAndroid()) try std.testing.expect(!driver.isAvailable());
+test "Vulkan driver is available when compiled in" {
+    try std.testing.expectEqual(supported, driver.isAvailable());
 }

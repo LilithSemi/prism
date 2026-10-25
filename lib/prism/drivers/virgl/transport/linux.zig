@@ -255,7 +255,7 @@ pub const Transport = struct {
         var buf: [64]u8 = undefined;
         const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{path}, 0) catch return error.OpenFailed;
         const rc = std.os.linux.open(z.ptr, .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-        switch (std.posix.errno(rc)) {
+        switch (std.os.linux.errno(rc)) {
             .SUCCESS => return @intCast(rc),
             else => return error.OpenFailed,
         }
@@ -287,7 +287,7 @@ pub const Transport = struct {
 
     fn ioctl(self: *Transport, request: u32, arg: usize) Error!void {
         const rc = std.os.linux.ioctl(self.fd, request, arg);
-        switch (std.posix.errno(rc)) {
+        switch (std.os.linux.errno(rc)) {
             .SUCCESS => {},
             else => |e| {
                 self.log.log("ioctl req=0x{x} errno={d}", .{ request, @intFromEnum(e) });
@@ -309,7 +309,7 @@ pub const Transport = struct {
             .ctx_set_params = @intFromPtr(&params),
         };
         const rc = std.os.linux.ioctl(self.fd, DRM_IOCTL_VIRTGPU_CONTEXT_INIT, @intFromPtr(&ci));
-        switch (std.posix.errno(rc)) {
+        switch (std.os.linux.errno(rc)) {
             .SUCCESS => {},
             else => return error.InitializationFailed,
         }
@@ -389,7 +389,7 @@ pub const Transport = struct {
     /// An ioctl whose failure is an init failure (resource create / map).
     fn ioctlInit(self: *Transport, request: u32, arg: usize) Error!void {
         const rc = std.os.linux.ioctl(self.fd, request, arg);
-        switch (std.posix.errno(rc)) {
+        switch (std.os.linux.errno(rc)) {
             .SUCCESS => {},
             else => |e| {
                 self.log.log("ioctlInit req=0x{x} errno={d}", .{ request, @intFromEnum(e) });
@@ -403,7 +403,7 @@ pub const Transport = struct {
         var m = drm_virtgpu_map{ .offset = 0, .handle = bo_handle, .pad = 0 };
         try self.ioctlInit(DRM_IOCTL_VIRTGPU_MAP, @intFromPtr(&m));
         const r = std.os.linux.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.fd, @intCast(m.offset));
-        switch (std.posix.errno(r)) {
+        switch (std.os.linux.errno(r)) {
             .SUCCESS => {},
             else => return error.InitializationFailed,
         }

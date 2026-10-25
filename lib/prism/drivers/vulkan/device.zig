@@ -1,9 +1,10 @@
 //! Vulkan-backed Prism HAL device.
 //!
-//! Android is the first platform implementation. Rendering uses ordinary Vulkan
-//! images, while presentation blits the completed image directly into an
-//! ANativeWindow swapchain without a CPU readback.
+//! Rendering uses ordinary Vulkan images on Android, Linux, macOS, and Windows. Android
+//! presentation blits the completed image directly into an ANativeWindow
+//! swapchain without a CPU readback; Linux is currently headless-only.
 const std = @import("std");
+const builtin = @import("builtin");
 const hal = @import("../../hal.zig");
 
 const vk = @import("vulkan-zig");
@@ -242,14 +243,17 @@ pub const Device = struct {
             .engine_version = 1,
             .api_version = vk.API_VERSION_1_0.toU32(),
         };
-        const instance_extensions = [_][*:0]const u8{ "VK_KHR_surface", "VK_KHR_android_surface" };
+        const instance_extensions: []const [*:0]const u8 = if (builtin.abi.isAndroid())
+            &.{ "VK_KHR_surface", "VK_KHR_android_surface" }
+        else
+            &.{};
         var instance_info: vk.InstanceCreateInfo = .{
             .flags = .{},
             .p_application_info = &app_info,
             .enabled_layer_count = 0,
             .pp_enabled_layer_names = null,
             .enabled_extension_count = instance_extensions.len,
-            .pp_enabled_extension_names = &instance_extensions,
+            .pp_enabled_extension_names = instance_extensions.ptr,
         };
         var instance: vk.Instance = undefined;
         try check(vkCreateInstance(&instance_info, null, &instance));
@@ -971,6 +975,8 @@ pub const Device = struct {
         return null;
     }
     fn createSurface(ptr: *anyopaque, platform_surface: *anyopaque) hal.Error!*hal.Surface {
+        if (!builtin.abi.isAndroid()) return error.Unsupported;
+
         const self = cast(ptr);
         const value = self.gpa.create(PresentSurface) catch return error.OutOfMemory;
         errdefer self.gpa.destroy(value);
