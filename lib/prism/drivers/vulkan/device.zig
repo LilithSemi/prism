@@ -1045,14 +1045,7 @@ pub const Device = struct {
 
         var image_count = capabilities.min_image_count + 1;
         if (capabilities.max_image_count != 0) image_count = @min(image_count, capabilities.max_image_count);
-        const alpha: vk.CompositeAlphaFlagsKHR = if (capabilities.supported_composite_alpha.opaque_khr)
-            .{ .opaque_khr = true }
-        else if (capabilities.supported_composite_alpha.pre_multiplied_khr)
-            .{ .pre_multiplied_khr = true }
-        else if (capabilities.supported_composite_alpha.post_multiplied_khr)
-            .{ .post_multiplied_khr = true }
-        else
-            .{ .inherit_khr = true };
+        const alpha = chooseCompositeAlpha(capabilities.supported_composite_alpha);
         var info: vk.SwapchainCreateInfoKHR = .{
             .flags = .{},
             .surface = target.handle,
@@ -1107,6 +1100,18 @@ pub const Device = struct {
             if (format.format == .b8g8r8a8_unorm and format.color_space == .srgb_nonlinear_khr) return format;
         }
         return available[0];
+    }
+
+    /// Preserve an Android window's alpha channel whenever the presentation
+    /// engine supports it. Opaque application surfaces already render alpha
+    /// one, while system-shell surfaces need their cleared alpha zero to reach
+    /// SurfaceFlinger. Choosing OPAQUE first discards that distinction even
+    /// when the ANativeWindow is RGBA_8888.
+    fn chooseCompositeAlpha(supported: vk.CompositeAlphaFlagsKHR) vk.CompositeAlphaFlagsKHR {
+        if (supported.pre_multiplied_khr) return .{ .pre_multiplied_khr = true };
+        if (supported.post_multiplied_khr) return .{ .post_multiplied_khr = true };
+        if (supported.opaque_khr) return .{ .opaque_khr = true };
+        return .{ .inherit_khr = true };
     }
 
     fn presentSurface(self: *Device, target: *PresentSurface, source: *Resource) hal.Error!void {
@@ -1224,3 +1229,17 @@ pub const Device = struct {
         .deinit = &deinit,
     };
 };
+
+test "Vulkan presentation preserves premultiplied window alpha" {
+    const chosen = Device.chooseCompositeAlpha(.{
+        .opaque_khr = true,
+        .pre_multiplied_khr = true,
+    });
+    try std.testing.expect(chosen.pre_multiplied_khr);
+    try std.testing.expect(!chosen.opaque_khr);
+}
+
+test "Vulkan presentation falls back to opaque alpha" {
+    const chosen = Device.chooseCompositeAlpha(.{ .opaque_khr = true });
+    try std.testing.expect(chosen.opaque_khr);
+}
