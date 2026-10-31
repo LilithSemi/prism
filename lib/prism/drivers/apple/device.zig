@@ -73,8 +73,7 @@ pub const Device = struct {
 
     /// Formats the AGX render/texture path supports. RGBA8 / BGRA8 unorm are
     /// the proven 8-bit color formats (the clear render pass writes linear RGBA8).
-    /// No HDR or depth formats are advertised: the clear path is 8-bit color only.
-    const supported_formats = [_]hal.Format{ .rgba8_unorm, .bgra8_unorm };
+    const supported_formats = [_]hal.Format{ .rgba8_unorm, .bgra8_unorm, .depth32_float };
 
     fn caps(ptr: *anyopaque) hal.DeviceCaps {
         const self: *Device = @ptrCast(@alignCast(ptr));
@@ -114,8 +113,8 @@ pub const Device = struct {
             .image => |i| {
                 if (i.width == 0 or i.height == 0 or i.width > 16384 or i.height > 16384)
                     return error.InvalidArgument;
-                if (i.format != .rgba8_unorm and i.format != .bgra8_unorm) return error.Unsupported;
-                if (i.samples != 1 or i.mip_levels != 1 or i.cube or i.depth != 1 or i.array)
+                if (i.format != .rgba8_unorm and i.format != .bgra8_unorm and i.format != .depth32_float) return error.Unsupported;
+                if (i.samples != 1 or i.mip_levels == 0 or i.mip_levels > 1 + std.math.log2_int(u32, @max(i.width, i.height)) or i.cube or i.depth != 1 or i.array)
                     return error.Unsupported;
             },
         }
@@ -128,7 +127,17 @@ pub const Device = struct {
             .buffer => |b| b.size,
             // A linear RGBA8 image is width*4 per row (the clear/PBE path is
             // linear, no tiling) * height.
-            .image => |i| @as(u64, i.width) * i.height * i.format.bytesPerPixel(),
+            .image => |i| blk: {
+                var bytes: u64 = 0;
+                var w = i.width;
+                var h = i.height;
+                for (0..i.mip_levels) |_| {
+                    bytes += @as(u64, w) * h * i.format.bytesPerPixel();
+                    w = @max(1, w / 2);
+                    h = @max(1, h / 2);
+                }
+                break :blk bytes;
+            },
         };
         if (size == 0) return error.InvalidArgument;
         // VM_BIND wants a 16-KiB-aligned range. Round the BO up to a page.
@@ -140,8 +149,8 @@ pub const Device = struct {
 
         const r = self.gpa.create(Resource) catch return error.OutOfMemory;
         r.* = switch (desc) {
-            .buffer => .{ .kind = .buffer, .bo = bo, .desc = desc },
-            .image => |i| .{ .kind = .image, .bo = bo, .desc = desc, .width = i.width, .height = i.height, .format = i.format },
+            .buffer => .{ .kind = .buffer, .bo = bo, .desc = desc, .byte_size = @intCast(size) },
+            .image => |i| .{ .kind = .image, .bo = bo, .desc = desc, .byte_size = @intCast(size), .width = i.width, .height = i.height, .format = i.format },
         };
         return @ptrCast(r);
     }
@@ -170,10 +179,7 @@ pub const Device = struct {
         asahi.cleanInvalidateToPoC(r.bo.cpu);
         // allocBo already CPU-mapped the BO (held for the resource's life, like
         // the nvidia driver). Expose the logical size.
-        const want: usize = switch (r.desc) {
-            .buffer => |b| b.size,
-            .image => |i| @as(usize, i.width) * i.height * i.format.bytesPerPixel(),
-        };
+        const want = r.byte_size;
         return r.bo.cpu[0..@min(want, r.bo.cpu.len)];
     }
 
@@ -363,9 +369,9 @@ test "apple bump-VA allocator: 16-KiB-aligned, monotonic, non-colliding, above r
 test "apple resource descriptors reject unsupported layouts before allocation" {
     try std.testing.expectError(error.InvalidArgument, Device.validateResourceDesc(.{ .buffer = .{ .size = 0 } }));
     try std.testing.expectError(error.InvalidArgument, Device.validateResourceDesc(.{ .image = .{ .width = 0, .height = 64, .format = .rgba8_unorm } }));
-    try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .depth32_float } }));
+    try Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .depth32_float } });
     try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .rgba8_unorm, .samples = 4 } }));
-    try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .rgba8_unorm, .mip_levels = 2 } }));
+    try Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .rgba8_unorm, .mip_levels = 2 } });
 }
 
 test "apple GPU triangle probe from the extracted library" {

@@ -3,6 +3,7 @@
 //! on the app's own wl_display. libwayland-client binds to the app's copy at runtime.
 
 const std = @import("std");
+const ClientQueue = @import("../wayland_client_queue.zig").Queue;
 const builtin = @import("builtin");
 const wlz = @import("wayland");
 
@@ -200,6 +201,7 @@ pub const ShmBuffer = struct {
 pub const WaylandPresent = struct {
     gpa: std.mem.Allocator,
     display: *wl_display,
+    event_queue: ClientQueue,
     surface: *wl_surface,
     shm: *wl_proxy,
     pool: *wl_proxy,
@@ -220,8 +222,12 @@ pub const WaylandPresent = struct {
         height: u32,
         count: u32,
     ) !*WaylandPresent {
+        const event_queue = try ClientQueue.init(display);
+        errdefer event_queue.deinit();
+        const wrapper = try event_queue.wrap(display);
+        defer ClientQueue.destroyWrapper(wrapper);
         const reg = wl_proxy_marshal_flags(
-            display,
+            wrapper,
             WL_DISPLAY_GET_REGISTRY,
             &wl_registry_interface,
             wl_proxy_get_version(display),
@@ -233,7 +239,7 @@ pub const WaylandPresent = struct {
         var probe = RegistryProbe{};
         if (wl_proxy_add_listener(reg, @ptrCast(&registry_impl), &probe) != 0)
             return error.ListenerFailed;
-        _ = wl_display_roundtrip(display);
+        try event_queue.roundtrip();
         if (!probe.found_shm) return error.NoWlShm;
 
         const bind_ver: u32 = @min(probe.shm_version, 1);
@@ -315,6 +321,7 @@ pub const WaylandPresent = struct {
         self.* = .{
             .gpa = gpa,
             .display = display,
+            .event_queue = event_queue,
             .surface = surface,
             .shm = shm,
             .pool = pool,
@@ -334,28 +341,23 @@ pub const WaylandPresent = struct {
         self.shm_pool.deinit();
         self.gpa.free(self.buffer_impls);
         self.gpa.free(self.buffers);
+        self.event_queue.deinit();
         self.gpa.destroy(self);
     }
 
     /// Find a free buffer index for the next frame. If all buffers are in-flight
     /// (compositor still holds them), wait for a wl_buffer.release event rather than
     /// overwriting a buffer the compositor is still scanning out. Writing into an
-    /// in-flight buffer causes tearing. Bounded so a wedged compositor falls back to
-    /// buffer reuse instead of deadlocking.
-    pub fn acquire(self: *WaylandPresent) u32 {
-        // Drain already-arrived releases first (non-blocking).
-        _ = wl_display_dispatch_pending(self.display);
-        for (self.buffers, 0..) |b, i| if (b.free) return @intCast(i);
-        // None free: flush so the compositor can release a buffer, then block on the
-        // display fd for a release event. wl_display_dispatch waits for at least one
-        // event, throttling to the compositor's pace instead of busy-spinning.
-        var tries: usize = 0;
-        while (tries < 200) : (tries += 1) {
-            _ = wl_display_flush(self.display);
-            if (wl_display_dispatch(self.display) < 0) break; // connection error
-            for (self.buffers, 0..) |b, i| if (b.free) return @intCast(i);
+    /// in-flight buffer causes tearing. Wait for a compositor release before reuse.
+    pub fn acquire(self: *WaylandPresent) !u32 {
+        try self.event_queue.pending();
+        while (true) {
+            for (self.buffers, 0..) |*buffer, i| if (buffer.free) {
+                buffer.free = false;
+                return @intCast(i);
+            };
+            try self.event_queue.wait(std.math.maxInt(u64));
         }
-        return 0; // wedged compositor: reuse rather than hang forever
     }
 
     /// Present buffer `index`: mark it owned, attach + damage + commit + flush on
@@ -375,7 +377,7 @@ pub const WaylandPresent = struct {
         );
         _ = wl_proxy_marshal_flags(
             self.surface,
-            WL_SURFACE_DAMAGE_BUFFER,
+            if (wl_proxy_get_version(self.surface) >= 4) WL_SURFACE_DAMAGE_BUFFER else 2,
             null,
             wl_proxy_get_version(self.surface),
             0,

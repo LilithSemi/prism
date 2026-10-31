@@ -27,14 +27,9 @@ pub const Error = error{InvalidSpirv} || std.mem.Allocator.Error || spirv.lower.
 /// what `spirv.lowerModule` expects (no Function-storage allocas, buffer parameter
 /// order == descriptor binding order).
 ///
-/// Graphics SPIR-V is handled entirely by `vulcan-spirv`. There is no Prism-side rewrite. The lowering consumes glslang's standard shapes natively: per-component
-/// vertex-input access (`OpAccessChain` into an Input vector + `OpLoad` of a scalar),
-/// gl_Position via the `gl_PerVertex` interface block (an Output `Block` struct whose
-/// member is BuiltIn Position, written through `OpAccessChain` + `OpStore`), and UBO
-/// matrices (`OpTypeMatrix` + `OpMatrixTimesVector`, fetched element-wise from the
-/// buffer in std140 column-major layout). Prism's only front-end job here is SSA
-/// construction (mem2reg, below), which is legitimately the front end's responsibility
-/// because Vulcan's IR is SSA-only by design.
+/// Graphics lowering consumes scalar inputs, interface-block outputs, and
+/// column-major UBO matrices. Matrix SSA construction and column extraction are
+/// expanded into vectors before lowering; storage retains its declared stride.
 pub fn parseSpirv(gpa: std.mem.Allocator, code: []const u8) Error!Function {
     if (code.len == 0 or code.len % 4 != 0) return error.InvalidSpirv;
     // SPIR-V is a u32 word stream. Copy into an aligned buffer (the incoming
@@ -52,7 +47,9 @@ pub fn parseSpirv(gpa: std.mem.Allocator, code: []const u8) Error!Function {
 
     const normalized = try normalize(gpa, inlined);
     defer gpa.free(normalized);
-    return spirv.lowerModule(gpa, normalized);
+    const matrices = try @import("spirv_matrix.zig").expand(gpa, normalized);
+    defer gpa.free(matrices);
+    return spirv.lowerModule(gpa, matrices);
 }
 
 // GL bottom-left origin vs. Vulkan top-left: GLES content renders upside-down without
@@ -1334,4 +1331,46 @@ test "flipPositionY leaves a fragment shader (no gl_Position) verbatim" {
     const result = try flipPositionY(gpa, raw);
     defer gpa.free(result);
     try std.testing.expectEqualSlices(u8, raw, result);
+}
+
+/// Place a Vulkan push-constant block at the HAL buffer slot selected by the
+/// pipeline layout. GLES keeps its separate per-stage default-uniform slots.
+/// The internal shader now sees an ordinary read-only buffer with the original
+/// member offsets, avoiding collisions with a real descriptor at binding zero.
+pub fn bindPushConstants(gpa: std.mem.Allocator, code: []const u8, binding: u32) Error![]u8 {
+    if (code.len == 0 or code.len % 4 != 0) return error.InvalidSpirv;
+    const words = try gpa.alloc(u32, code.len / 4);
+    defer gpa.free(words);
+    @memcpy(std.mem.sliceAsBytes(words), code);
+    var reader = spirv.binary.Reader.init(words) catch return error.InvalidSpirv;
+    const op = spirv.opcodes;
+    var variables: std.ArrayList(u32) = .empty;
+    defer variables.deinit(gpa);
+    while (reader.next() catch return error.InvalidSpirv) |inst| {
+        if (inst.opcode == op.Variable and inst.operands.len >= 3 and inst.operands[2] == op.StorageClass.push_constant)
+            try variables.append(gpa, inst.operands[1]);
+    }
+    var out = try spirv.binary.Builder.init(gpa, reader.header.id_bound);
+    defer out.deinit(gpa);
+    @memcpy(out.words.items[0..5], words[0..5]);
+    reader.pos = 5;
+    var decorated = false;
+    while (reader.next() catch return error.InvalidSpirv) |inst| {
+        if (!decorated and inst.opcode >= op.TypeVoid and inst.opcode <= op.TypePointer) {
+            for (variables.items) |variable| {
+                try out.emit(gpa, op.Decorate, &.{ variable, op.Decoration.binding, binding });
+                try out.emit(gpa, op.Decorate, &.{ variable, op.Decoration.descriptor_set, 0 });
+            }
+            decorated = true;
+        }
+        if (inst.opcode == op.TypePointer and inst.operands.len == 3 and inst.operands[1] == op.StorageClass.push_constant) {
+            try out.emit(gpa, op.TypePointer, &.{ inst.operands[0], op.StorageClass.uniform, inst.operands[2] });
+        } else if (inst.opcode == op.Variable and inst.operands.len >= 3 and inst.operands[2] == op.StorageClass.push_constant) {
+            const a = try gpa.dupe(u32, inst.operands);
+            defer gpa.free(a);
+            a[2] = op.StorageClass.uniform;
+            try out.emit(gpa, inst.opcode, a);
+        } else try out.emit(gpa, inst.opcode, inst.operands);
+    }
+    return gpa.dupe(u8, std.mem.sliceAsBytes(out.words.items));
 }

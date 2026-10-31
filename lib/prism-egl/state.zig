@@ -911,7 +911,7 @@ fn swapWaylandWindow(ctx: *Context, surface: *Surface) prism.Error!void {
     const wp = surface.wl_present.?;
 
     const dev = ctx.display.device.?;
-    const idx = wp.acquire();
+    const idx = wp.acquire() catch return error.DeviceLost;
     const dst = wp.buffers[idx].pixels;
     // Fast path: let the driver de-swizzle the rendered RT straight into the wl_shm
     // XRGB8888 buffer in ONE pass (no linear-copy intermediate, no separate blit).

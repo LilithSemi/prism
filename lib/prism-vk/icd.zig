@@ -511,6 +511,14 @@ pub fn getDeviceQueue(
     pQueue.* = @ptrCast(&dev.queue);
 }
 
+pub fn getDeviceQueue2(
+    device: vk.VkDevice,
+    pQueueInfo: *const vk.VkDeviceQueueInfo2,
+    pQueue: *vk.VkQueue,
+) callconv(.c) void {
+    getDeviceQueue(device, pQueueInfo.queueFamilyIndex, pQueueInfo.queueIndex, pQueue);
+}
+
 // Buffer + memory entry points.
 
 pub fn createBuffer(
@@ -853,7 +861,8 @@ pub const MAX_BUF_COPIES = 32;
 
 /// One recorded buffer-to-buffer copy region (vkCmdCopyBuffer).
 pub const BufCopy = extern struct {
-    src: *Buffer,
+    src: ?*Buffer,
+    data: ?[*]u8 = null,
     dst: *Buffer,
     src_offset: u64,
     dst_offset: u64,
@@ -946,6 +955,7 @@ pub const CommandBuffer = extern struct {
     // staging buffer, write, then copy into the vertex/index/uniform buffer). Executed at submit.
     buf_copies: [MAX_BUF_COPIES]BufCopy = undefined,
     buf_copy_count: usize = 0,
+    record_error: bool = false,
     // The current push-constant block. vkCmdPushConstants writes into it at the given
     // offset. Each cmdDraw snapshots the whole block (PUSH_CONSTANT_SIZE bytes) so a
     // shader can read any offset. pc_dirty marks that at least one push happened.
@@ -984,6 +994,7 @@ pub const CommandBuffer = extern struct {
 fn halFormat(f: vk.VkFormat) prism.hal.Format {
     return switch (f) {
         vk.VK_FORMAT_R8G8B8A8_UNORM, vk.VK_FORMAT_R8G8B8A8_SRGB => .rgba8_unorm,
+        vk.VK_FORMAT_B8G8R8A8_UNORM, vk.VK_FORMAT_B8G8R8A8_SRGB => .bgra8_unorm,
         vk.VK_FORMAT_R8_UNORM => .r8_unorm,
         vk.VK_FORMAT_R8G8_UNORM => .r8g8_unorm,
         vk.VK_FORMAT_R16_SFLOAT => .r16_float,
@@ -1154,6 +1165,8 @@ pub const GraphicsPipeline = struct {
     hal_vs: *prism.hal.ShaderModule,
     hal_fs: *prism.hal.ShaderModule,
     hal_pipeline: *prism.hal.Pipeline,
+    color_format: prism.hal.Format = .rgba8_unorm,
+    topology: vk.VkPrimitiveTopology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     /// Owned copy of the HAL vertex attributes (the HAL pipeline borrows this).
     attrs: [MAX_VERTEX_ATTRS]prism.hal.VertexAttribute = undefined,
     attr_count: usize = 0,
@@ -1773,6 +1786,7 @@ pub fn createGraphicsPipelines(
     var i: u32 = 0;
     while (i < createInfoCount) : (i += 1) {
         const ci = cis[i];
+        out[i] = vk.VK_NULL_HANDLE;
         const vis = ci.pVertexInputState orelse return .VK_ERROR_INITIALIZATION_FAILED;
 
         // Derive position/color attribute locations: position = the smallest
@@ -1834,6 +1848,24 @@ pub fn createGraphicsPipelines(
             if (n < 2 or col_loc == std.math.maxInt(u32)) return .VK_ERROR_INITIALIZATION_FAILED;
         } else if (col_loc == std.math.maxInt(u32)) {
             col_loc = pos_loc; // unused by the JIT path. Keep encodeVertex well-formed.
+        }
+
+        var remapped_vs: ?[]u8 = null;
+        defer if (remapped_vs) |bytes| allocator.free(bytes);
+        var remapped_fs: ?[]u8 = null;
+        defer if (remapped_fs) |bytes| allocator.free(bytes);
+        if (ci.layout != vk.VK_NULL_HANDLE) {
+            const pl = PipelineLayout.fromHandle(ci.layout);
+            if (pl.push_constant_size != 0) {
+                if (vs_spirv) |bytes| {
+                    remapped_vs = prism.spirv.bindPushConstants(allocator, bytes, pl.binding_count) catch return .VK_ERROR_INITIALIZATION_FAILED;
+                    vs_spirv = remapped_vs;
+                }
+                if (fs_spirv) |bytes| {
+                    remapped_fs = prism.spirv.bindPushConstants(allocator, bytes, pl.binding_count) catch return .VK_ERROR_INITIALIZATION_FAILED;
+                    fs_spirv = remapped_fs;
+                }
+            }
         }
 
         const hal_vs_bytes = shader.encodeVertex(.{ .position_attr = pos_loc, .color_attr = col_loc });
@@ -1969,7 +2001,7 @@ pub fn createGraphicsPipelines(
                 };
             }
         }
-        vtrace("createGraphicsPipeline cull mode={} front={} hasRS={} samples={}", .{ @intFromEnum(cull_state.mode), @intFromEnum(cull_state.front_face), ci.pRasterizationState != null, msaa_samples });
+        vtrace("createGraphicsPipeline cull mode={} front={} hasRS={} samples={}", .{ @backingInt(cull_state.mode), @backingInt(cull_state.front_face), ci.pRasterizationState != null, msaa_samples });
 
         const pipe = allocator.create(GraphicsPipeline) catch {
             dev.hal().destroyShaderModule(hal_vs);
@@ -1978,6 +2010,9 @@ pub fn createGraphicsPipelines(
         };
         pipe.* = .{ .hal_vs = hal_vs, .hal_fs = hal_fs, .hal_pipeline = undefined, .attr_count = n, .depth = depth_state, .stencil = stencil_state, .stencil_back = stencil_back, .samples = msaa_samples, .dyn_stencil_ref = dyn_ref, .dyn_stencil_compare = dyn_cmp, .dyn_stencil_write = dyn_wrt, .stride = stride, .cull = cull_state, .blend = blend_state };
         @memcpy(pipe.attrs[0..n], attrs[0..n]);
+        pipe.color_format = if (ci.renderPass != vk.VK_NULL_HANDLE) RenderPass.fromHandle(ci.renderPass).color_format else .rgba8_unorm;
+        pipe.topology = if (ci.pInputAssemblyState) |state| state.topology else vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        vtrace("pipeline topology={} stride={}", .{ pipe.topology, stride });
 
         // Record the pipeline layout's descriptor binding count + whether it declares
         // push constants. A push-constant block is bound at the slot right after the
@@ -1992,14 +2027,15 @@ pub fn createGraphicsPipelines(
             .vertex = hal_vs,
             .fragment = hal_fs,
             .vertex_layout = .{ .stride = stride, .attributes = pipe.attrs[0..n] },
-            .color_format = .rgba8_unorm,
+            .color_format = pipe.color_format,
             .depth = depth_state,
             .cull = cull_state,
             .samples = msaa_samples,
             .stencil = stencil_state,
             .stencil_back = stencil_back,
             .blend = blend_state,
-        }) catch {
+        }) catch |err| {
+            vtrace("createGraphicsPipeline failed: {s}", .{@errorName(err)});
             dev.hal().destroyShaderModule(hal_vs);
             dev.hal().destroyShaderModule(hal_fs);
             allocator.destroy(pipe);
@@ -2144,7 +2180,10 @@ pub fn destroyCommandPool(
     _ = pAllocator;
     if (commandPool == vk.VK_NULL_HANDLE) return;
     const pool = CommandPool.fromHandle(commandPool);
-    for (pool.buffers.items) |cb| allocator.destroy(cb);
+    for (pool.buffers.items) |cb| {
+        clearBufferCopies(cb);
+        allocator.destroy(cb);
+    }
     pool.buffers.deinit(allocator);
     allocator.destroy(pool);
 }
@@ -2206,7 +2245,7 @@ pub fn beginCommandBuffer(
     cb.copy_src_image = null;
     cb.copy_dst_buffer = null;
     cb.has_copy = false;
-    cb.buf_copy_count = 0;
+    clearBufferCopies(cb);
     cb.pc_dirty = false;
     return .VK_SUCCESS;
 }
@@ -2214,8 +2253,7 @@ pub fn beginCommandBuffer(
 pub fn endCommandBuffer(
     commandBuffer: vk.VkCommandBuffer,
 ) callconv(.c) vk.VkResult {
-    _ = commandBuffer;
-    return .VK_SUCCESS;
+    return if (CommandBuffer.fromHandle(commandBuffer).record_error) .VK_ERROR_OUT_OF_HOST_MEMORY else .VK_SUCCESS;
 }
 
 /// vkResetCommandBuffer: a standard render loop resets + re-records each frame.
@@ -2241,7 +2279,7 @@ pub fn resetCommandBuffer(
     cb.copy_src_image = null;
     cb.copy_dst_buffer = null;
     cb.has_copy = false;
-    cb.buf_copy_count = 0;
+    clearBufferCopies(cb);
     cb.pc_dirty = false;
     return .VK_SUCCESS;
 }
@@ -2548,6 +2586,7 @@ pub fn cmdDraw(
     firstVertex: u32,
     firstInstance: u32,
 ) callconv(.c) void {
+    vtrace("cmdDraw vertices={} instances={} first={}", .{ vertexCount, instanceCount, firstVertex });
     const cb = CommandBuffer.fromHandle(commandBuffer);
     cb.draw_vertex_count = vertexCount;
     cb.draw_first_vertex = firstVertex;
@@ -2718,17 +2757,52 @@ pub fn cmdCopyBuffer(
 /// Execute the recorded vkCmdCopyBuffer regions: memcpy each src range into the dst buffer (both are
 /// host-mappable HAL resources). Best-effort: a region referencing an unbound buffer or exceeding a
 /// buffer's bytes is clamped/skipped rather than faulting.
+fn clearBufferCopies(cb: *CommandBuffer) void {
+    for (cb.buf_copies[0..cb.buf_copy_count]) |copy| if (copy.data) |bytes| allocator.free(bytes[0..@intCast(copy.size)]);
+    cb.buf_copy_count = 0;
+    cb.record_error = false;
+}
+
+/// Snapshot the application's bytes while recording; they may be changed or
+/// freed before submission. Replay the upload in transfer-command order.
+pub fn cmdUpdateBuffer(
+    commandBuffer: vk.VkCommandBuffer,
+    dstBuffer: vk.VkBuffer,
+    dstOffset: vk.VkDeviceSize,
+    dataSize: vk.VkDeviceSize,
+    pData: *const anyopaque,
+) callconv(.c) void {
+    const cb = CommandBuffer.fromHandle(commandBuffer);
+    if (cb.buf_copy_count == MAX_BUF_COPIES) {
+        cb.record_error = true;
+        return;
+    }
+    const bytes: [*]const u8 = @ptrCast(pData);
+    const owned = allocator.dupe(u8, bytes[0..@intCast(dataSize)]) catch {
+        cb.record_error = true;
+        return;
+    };
+    cb.buf_copies[cb.buf_copy_count] = .{ .src = null, .data = owned.ptr, .dst = Buffer.fromHandle(dstBuffer), .src_offset = 0, .dst_offset = dstOffset, .size = dataSize };
+    cb.buf_copy_count += 1;
+}
+
 fn executeBufferCopies(dev: *LogicalDevice, cb: *CommandBuffer) void {
     var i: usize = 0;
     while (i < cb.buf_copy_count) : (i += 1) {
         const c = cb.buf_copies[i];
-        const smem = c.src.memory orelse continue;
         const dmem = c.dst.memory orelse continue;
-        const sbytes = dev.hal().mapResource(smem.resource) catch continue;
+        const sbytes = if (c.src) |src| blk: {
+            const smem = src.memory orelse continue;
+            const bytes = dev.hal().mapResource(smem.resource) catch continue;
+            if (src.offset > bytes.len) continue;
+            break :blk bytes[@intCast(src.offset)..][0..@intCast(@min(src.size, bytes.len - src.offset))];
+        } else c.data.?[0..@intCast(c.size)];
         const dbytes = dev.hal().mapResource(dmem.resource) catch continue;
-        if (c.src_offset >= sbytes.len or c.dst_offset >= dbytes.len) continue;
-        const n = @min(c.size, @min(sbytes.len - c.src_offset, dbytes.len - c.dst_offset));
-        @memcpy(dbytes[@intCast(c.dst_offset)..][0..@intCast(n)], sbytes[@intCast(c.src_offset)..][0..@intCast(n)]);
+        if (c.dst.offset > dbytes.len) continue;
+        const dst = dbytes[@intCast(c.dst.offset)..][0..@intCast(@min(c.dst.size, dbytes.len - c.dst.offset))];
+        if (c.src_offset >= sbytes.len or c.dst_offset >= dst.len) continue;
+        const n = @min(c.size, @min(sbytes.len - c.src_offset, dst.len - c.dst_offset));
+        @memcpy(dst[@intCast(c.dst_offset)..][0..@intCast(n)], sbytes[@intCast(c.src_offset)..][0..@intCast(n)]);
     }
 }
 
@@ -2933,7 +3007,7 @@ fn executePassInstance(
                 .vertex = gp.hal_vs,
                 .fragment = gp.hal_fs,
                 .vertex_layout = .{ .stride = gp.stride, .attributes = gp.attrs[0..gp.attr_count] },
-                .color_format = .rgba8_unorm,
+                .color_format = gp.color_format,
                 .depth = gp.depth,
                 .cull = gp.cull,
                 .samples = gp.samples,
@@ -2945,15 +3019,32 @@ fn executePassInstance(
             draw_pipe = variant;
         }
         hcb.bindPipeline(draw_pipe) catch return .VK_ERROR_DEVICE_LOST;
+        var first_vertex = d.first_vertex;
+        var vertex_count = d.vertex_count;
         if (d.is_indexed) {
             // Expand the indexed draw into a flat non-indexed vertex stream (the HAL has no indexed
             // draw), bind that, and draw index_count vertices. Attribute-fed only.
             const expanded = expandIndexedDraw(dev, d) orelse return .VK_ERROR_DEVICE_LOST;
             idx_res[i - draw_start] = expanded;
             hcb.bindVertexBuffer(expanded) catch return .VK_ERROR_DEVICE_LOST;
+            first_vertex = 0;
         } else if (d.vertex_buffer) |vb| {
             const vmem = vb.memory orelse return .VK_ERROR_INITIALIZATION_FAILED;
             hcb.bindVertexBuffer(vmem.resource) catch return .VK_ERROR_DEVICE_LOST;
+        }
+        if (d.pipeline.topology == 4 or d.pipeline.topology == 5) {
+            const original = idx_res[i - draw_start];
+            const buffer = if (original) |resource| resource else blk: {
+                const vb = d.vertex_buffer orelse return .VK_ERROR_INITIALIZATION_FAILED;
+                break :blk (vb.memory orelse return .VK_ERROR_INITIALIZATION_FAILED).resource;
+            };
+            const offset = if (original != null) 0 else d.vertex_buffer.?.offset;
+            const expanded = expandTriangleStrip(dev, buffer, offset, first_vertex, vertex_count, d.pipeline.stride, d.pipeline.topology == 5) orelse return .VK_ERROR_DEVICE_LOST;
+            if (original) |resource| dev.hal().destroyResource(resource);
+            idx_res[i - draw_start] = expanded;
+            hcb.bindVertexBuffer(expanded) catch return .VK_ERROR_DEVICE_LOST;
+            first_vertex = 0;
+            vertex_count = if (vertex_count >= 3) (vertex_count - 2) * 3 else 0;
         }
         if (d.descriptor_set) |set| bindUniformBuffers(hcb, set) catch return .VK_ERROR_DEVICE_LOST;
         if (d.has_push_constants) {
@@ -2979,8 +3070,7 @@ fn executePassInstance(
             hcb.setScissor(null) catch return .VK_ERROR_DEVICE_LOST;
         }
         // Indexed: the expanded stream is already in index order, so draw from vertex 0.
-        const fv: u32 = if (d.is_indexed) 0 else d.first_vertex;
-        hcb.drawInstanced(d.vertex_count, d.instance_count, fv, d.first_instance) catch return .VK_ERROR_DEVICE_LOST;
+        hcb.drawInstanced(vertex_count, d.instance_count, first_vertex, d.first_instance) catch return .VK_ERROR_DEVICE_LOST;
     }
     // MSAA resolve: box-average the N samples of the multisampled target into the
     // single-sample resolve image, recorded as the last command in this pass's HAL
@@ -2992,7 +3082,10 @@ fn executePassInstance(
             }
         }
     }
-    ctx.submit(hcb) catch return .VK_ERROR_DEVICE_LOST;
+    ctx.submit(hcb) catch |err| {
+        vtrace("render submit failed: {s}", .{@errorName(err)});
+        return .VK_ERROR_DEVICE_LOST;
+    };
     return .VK_SUCCESS;
 }
 
@@ -3001,6 +3094,29 @@ fn executePassInstance(
 /// (index + vertexOffset) from the bound vertex buffer into a fresh HAL vertex buffer in draw order.
 /// The caller binds it and draws index_count vertices non-indexed. Returns null on any failure (a
 /// missing vertex/index buffer, e.g. an unsupported vertex-pulling indexed draw). The caller frees it.
+fn expandTriangleStrip(dev: *LogicalDevice, buffer: *prism.hal.Resource, offset: u64, first: u32, count: u32, stride: u32, fan: bool) ?*prism.hal.Resource {
+    if (stride == 0 or count < 3) return null;
+    const bytes = dev.hal().mapResource(buffer) catch return null;
+    const begin = std.math.add(u64, offset, @as(u64, first) * stride) catch return null;
+    const end = std.math.add(u64, begin, @as(u64, count) * stride) catch return null;
+    if (end > bytes.len) return null;
+    const size = std.math.mul(usize, @as(usize, count - 2) * 3, stride) catch return null;
+    const result = dev.hal().createResource(.{ .buffer = .{ .size = size, .usage = .{ .vertex = true } } }) catch return null;
+    const out = dev.hal().mapResource(result) catch {
+        dev.hal().destroyResource(result);
+        return null;
+    };
+    for (0..count - 2) |triangle| {
+        const indices: [3]usize = if (fan) .{ 0, triangle + 1, triangle + 2 } else if (triangle % 2 == 0) .{ triangle, triangle + 1, triangle + 2 } else .{ triangle + 1, triangle, triangle + 2 };
+        for (indices, 0..) |vertex, corner| {
+            const src = begin + vertex * stride;
+            const dst = (triangle * 3 + corner) * stride;
+            @memcpy(out[dst..][0..stride], bytes[@intCast(src)..][0..stride]);
+        }
+    }
+    return result;
+}
+
 fn expandIndexedDraw(dev: *LogicalDevice, d: GfxDraw) ?*prism.hal.Resource {
     const vb = d.vertex_buffer orelse return null; // indexed vertex-pulling not supported
     const vmem = vb.memory orelse return null;
@@ -3609,13 +3725,13 @@ pub fn createSwapchainKHR(
         const res = dev.hal().createResource(.{ .image = .{
             .width = w,
             .height = h,
-            .format = .rgba8_unorm,
+            .format = halFormat(ci.imageFormat),
             .usage = .{ .render_target = true, .copy_src = true },
         } }) catch {
             allocator.destroy(img);
             return .VK_ERROR_INITIALIZATION_FAILED;
         };
-        img.* = .{ .width = w, .height = h, .format = .rgba8_unorm, .resource = res };
+        img.* = .{ .width = w, .height = h, .format = halFormat(ci.imageFormat), .resource = res };
         images[made] = img;
     }
 
@@ -3711,14 +3827,17 @@ pub fn acquireNextImageKHR(
     pImageIndex: *u32,
 ) callconv(.c) vk.VkResult {
     _ = device;
-    _ = timeout;
     _ = semaphore;
     const sc = Swapchain.fromHandle(swapchain);
     if (!SwapchainRegistry.isLive(sc)) return .VK_ERROR_OUT_OF_DATE_KHR;
     if (sc.wl) |wsi| {
         // libwayland (FIFO): return a buffer the compositor has released. Image
         // index == wl_buffer index (created in the same order).
-        pImageIndex.* = wsi.acquire();
+        pImageIndex.* = wsi.acquire(timeout) catch |err| return switch (err) {
+            error.NotReady => .VK_NOT_READY,
+            error.Timeout => .VK_TIMEOUT,
+            else => .VK_ERROR_SURFACE_LOST_KHR,
+        };
     } else {
         pImageIndex.* = sc.next;
         sc.next = (sc.next + 1) % @as(u32, @intCast(sc.images.len));
@@ -3738,7 +3857,7 @@ var present_dumped: bool = false;
 /// presents that the scene is drawn, not the initial clear): the frame index is
 /// `PRISM_VK_DUMP_FRAME` if set, else 60. Best-effort: any failure is silently ignored (it
 /// must never disturb presentation).
-fn dumpPresentImage(dev: *LogicalDevice, res: *prism.hal.Resource, width: u32, height: u32) void {
+fn dumpPresentImage(dev: *LogicalDevice, res: *prism.hal.Resource, width: u32, height: u32, format: prism.hal.Format) void {
     const path_c = std.c.getenv("PRISM_VK_DUMP") orelse return;
     present_count += 1;
     // PRISM_VK_DUMP_FRAME: dump exactly that frame once. If unset, dump every present
@@ -3766,9 +3885,9 @@ fn dumpPresentImage(dev: *LogicalDevice, res: *prism.hal.Resource, width: u32, h
         var x: u32 = 0;
         while (x < width) : (x += 1) {
             const si = (@as(usize, y) * width + x) * 4;
-            row[x * 3 + 0] = src[si + 0];
+            row[x * 3 + 0] = src[si + @as(usize, if (format == .bgra8_unorm) 2 else 0)];
             row[x * 3 + 1] = src[si + 1];
-            row[x * 3 + 2] = src[si + 2];
+            row[x * 3 + 2] = src[si + @as(usize, if (format == .bgra8_unorm) 0 else 2)];
         }
         _ = std.c.fwrite(&row, 1, @as(usize, width) * 3, f);
     }
@@ -3800,7 +3919,7 @@ pub fn queuePresentKHR(
         // Optional present capture: when PRISM_VK_DUMP is set, write the rendered
         // swapchain image (RGBA8) to that path as a PPM. Compositor-independent capture
         // (e.g. on Weston, which has no wlr-screencopy for grim).
-        dumpPresentImage(sc.dev, res, sc.width, sc.height);
+        dumpPresentImage(sc.dev, res, sc.width, sc.height, sc.images[idx].format);
         if (sc.wl) |wsi| {
             // (A) standard libwayland: blit the rendered RGBA8 image into the
             // wl_shm buffer's XRGB8888 pixels, then attach+damage+commit+flush
@@ -3809,7 +3928,10 @@ pub fn queuePresentKHR(
                 if (pi.pResults) |r| r[i] = .VK_ERROR_DEVICE_LOST;
                 return .VK_ERROR_DEVICE_LOST;
             };
-            wsi_wl.blitRgbaToXrgb(wsi.buffers[idx].pixels, src, sc.width, sc.height);
+            if (sc.images[idx].format == .bgra8_unorm) {
+                const n = @min(wsi.buffers[idx].pixels.len, src.len);
+                @memcpy(wsi.buffers[idx].pixels[0..n], src[0..n]);
+            } else wsi_wl.blitRgbaToXrgb(wsi.buffers[idx].pixels, src, sc.width, sc.height);
             wsi.present(idx);
         } else {
             // (B) legacy Prism: reuse the platform.wayland present path (blit the
@@ -3878,6 +4000,7 @@ pub fn getDeviceProcAddr(
         .{ "vkGetDeviceProcAddr", asVoidFn(getDeviceProcAddr) },
         .{ "vkDestroyDevice", asVoidFn(destroyDevice) },
         .{ "vkGetDeviceQueue", asVoidFn(getDeviceQueue) },
+        .{ "vkGetDeviceQueue2", asVoidFn(getDeviceQueue2) },
         .{ "vkCreateBuffer", asVoidFn(createBuffer) },
         .{ "vkDestroyBuffer", asVoidFn(destroyBuffer) },
         .{ "vkGetBufferMemoryRequirements", asVoidFn(getBufferMemoryRequirements) },
@@ -3966,6 +4089,7 @@ const graphics_dispatch_table = .{
     .{ "vkDestroySampler", asVoidFn(destroySampler) },
     .{ "vkCmdCopyBufferToImage", asVoidFn(cmdCopyBufferToImage) },
     .{ "vkCmdCopyBuffer", asVoidFn(cmdCopyBuffer) },
+    .{ "vkCmdUpdateBuffer", asVoidFn(cmdUpdateBuffer) },
     .{ "vkGetImageSubresourceLayout", asVoidFn(getImageSubresourceLayout) },
 };
 
@@ -4035,6 +4159,7 @@ pub fn getInstanceProcAddr(
         .{ "vkDestroyDevice", asVoidFn(destroyDevice) },
         .{ "vkGetDeviceProcAddr", asVoidFn(getDeviceProcAddr) },
         .{ "vkGetDeviceQueue", asVoidFn(getDeviceQueue) },
+        .{ "vkGetDeviceQueue2", asVoidFn(getDeviceQueue2) },
         .{ "vkEnumerateDeviceExtensionProperties", asVoidFn(enumerateDeviceExtensionProperties) },
         // Device-level memory/buffer entry points. The loader also resolves these
         // through the instance proc addr, so list them here too (in addition to
@@ -4205,6 +4330,12 @@ test "compute pipeline dispatch runs a SPIR-V kernel through the ICD" {
     defer destroyDevice(device, null);
     var queue: vk.VkQueue = null;
     getDeviceQueue(device, 0, 0, &queue);
+    var queue2: vk.VkQueue = null;
+    const queue_info = std.mem.zeroInit(vk.VkDeviceQueueInfo2, .{ .sType = .VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2 });
+    const get_queue2: *const fn (vk.VkDevice, *const vk.VkDeviceQueueInfo2, *vk.VkQueue) callconv(.c) void = @ptrCast(getDeviceProcAddr(device, "vkGetDeviceQueue2").?);
+    get_queue2(device, &queue_info, &queue2);
+    try std.testing.expectEqual(queue, queue2);
+    try std.testing.expect(getInstanceProcAddr(inst, "vkGetDeviceQueue2") != null);
 
     // Two storage buffers (N=256 u32s each), HAL-backed via M2.
     const N = 256;
@@ -5017,6 +5148,24 @@ test "vkCmdCopyBuffer: copies a sub-range (srcOffset + dstOffset + size) between
     try std.testing.expectEqual(@as(u8, 8), d.ptr[16]); // start = src[8]
     try std.testing.expectEqual(@as(u8, 39), d.ptr[47]); // end = src[8+31]
     try std.testing.expectEqual(@as(u8, 0), d.ptr[48]); // just after
+
+    // Updates snapshot host data at record time and retain transfer order.
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, beginCommandBuffer(cmd, &bi));
+    var update = [_]u8{ 91, 92, 93, 94 };
+    cmdUpdateBuffer(cmd, s.buf, 8, update.len, &update);
+    @memset(&update, 0);
+    const updated = vk.VkBufferCopy{ .srcOffset = 8, .dstOffset = 20, .size = 4 };
+    cmdCopyBuffer(cmd, s.buf, d.buf, 1, @ptrCast(&updated));
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, endCommandBuffer(cmd));
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, queueSubmit(queue, 1, @ptrCast(&submit), vk.VK_NULL_HANDLE));
+    try std.testing.expectEqualSlices(u8, &.{ 91, 92, 93, 94 }, d.ptr[20..24]);
+    // Re-recording discards the old update and its owned storage.
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, beginCommandBuffer(cmd, &bi));
+    @memset(s.ptr[8..12], 7);
+    cmdCopyBuffer(cmd, s.buf, d.buf, 1, @ptrCast(&updated));
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, endCommandBuffer(cmd));
+    try std.testing.expectEqual(vk.VkResult.VK_SUCCESS, queueSubmit(queue, 1, @ptrCast(&submit), vk.VK_NULL_HANDLE));
+    try std.testing.expectEqualSlices(u8, &.{ 7, 7, 7, 7 }, d.ptr[20..24]);
 }
 
 /// Test helper: create a logical device on the software physical device (the
@@ -5595,7 +5744,7 @@ test "dynamic stencil through the ICD: vkCmdSetStencilReference/CompareMask/Writ
     //   cmp 0    -> content EQUAL passes everywhere -> right also red
     //   write 0  -> mask writes nothing -> content fails everywhere -> all black
     const dyn_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_STENCIL_REFERENCE, vk.VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, vk.VK_DYNAMIC_STATE_STENCIL_WRITE_MASK };
-    const dyn_ci = vk.VkPipelineDynamicStateCreateInfo{ .sType = @enumFromInt(0), .pNext = null, .flags = 0, .dynamicStateCount = dyn_states.len, .pDynamicStates = &dyn_states };
+    const dyn_ci = vk.VkPipelineDynamicStateCreateInfo{ .sType = @fromBackingInt(@intCast(0)), .pNext = null, .flags = 0, .dynamicStateCount = dyn_states.len, .pDynamicStates = &dyn_states };
     const mkStencil = struct {
         fn ds(compare: vk.VkCompareOp, pass: vk.VkStencilOp) vk.VkPipelineDepthStencilStateCreateInfo {
             const face = vk.VkStencilOpState{ .failOp = vk.VK_STENCIL_OP_KEEP, .passOp = pass, .depthFailOp = vk.VK_STENCIL_OP_KEEP, .compareOp = compare, .compareMask = 0, .writeMask = 0, .reference = 99 };

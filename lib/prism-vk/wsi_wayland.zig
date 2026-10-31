@@ -3,6 +3,7 @@
 //! app's libwayland-client.so at runtime, matching Mesa's wsi_common_wayland.
 
 const std = @import("std");
+const ClientQueue = @import("../wayland_client_queue.zig").Queue;
 /// Prism's Zig Wayland library. Used for `shm.ShmPool` (memfd + mmap) and format
 /// consts for the swapchain's CPU buffers. Proxy marshaling goes through the app's
 /// real libwayland to reach the app's wl_surface.
@@ -59,6 +60,7 @@ const WL_SHM_POOL_DESTROY: u32 = 1;
 const WL_BUFFER_DESTROY: u32 = 0;
 const WL_SURFACE_ATTACH: u32 = 1;
 const WL_SURFACE_DAMAGE_BUFFER: u32 = 9;
+const WL_SURFACE_DAMAGE: u32 = 2;
 const WL_SURFACE_COMMIT: u32 = 6;
 
 const WL_MARSHAL_FLAG_DESTROY: u32 = 1;
@@ -124,6 +126,7 @@ pub const ShmBuffer = struct {
 pub const WaylandWsi = struct {
     gpa: std.mem.Allocator,
     display: *wl_display,
+    event_queue: ClientQueue,
     surface: *wl_surface,
     shm: *wl_proxy,
     pool: *wl_proxy,
@@ -146,8 +149,12 @@ pub const WaylandWsi = struct {
         count: u32,
     ) !*WaylandWsi {
         // 1) Registry roundtrip to find + bind wl_shm.
+        const event_queue = try ClientQueue.init(display);
+        errdefer event_queue.deinit();
+        const wrapper = try event_queue.wrap(display);
+        defer ClientQueue.destroyWrapper(wrapper);
         const reg = wl_proxy_marshal_flags(
-            display,
+            wrapper,
             WL_DISPLAY_GET_REGISTRY,
             &wl_registry_interface,
             wl_proxy_get_version(display),
@@ -160,7 +167,7 @@ pub const WaylandWsi = struct {
         if (wl_proxy_add_listener(reg, @ptrCast(&registry_impl), &probe) != 0)
             return error.ListenerFailed;
         // The roundtrip drives the global advertisements into onGlobal.
-        _ = wl_display_roundtrip(display);
+        try event_queue.roundtrip();
         if (!probe.found_shm) return error.NoWlShm;
 
         const bind_ver: u32 = @min(probe.shm_version, 1);
@@ -245,6 +252,7 @@ pub const WaylandWsi = struct {
         self.* = .{
             .gpa = gpa,
             .display = display,
+            .event_queue = event_queue,
             .surface = surface,
             .shm = shm,
             .pool = pool,
@@ -264,22 +272,20 @@ pub const WaylandWsi = struct {
         self.shm_pool.deinit();
         self.gpa.free(self.buffer_impls);
         self.gpa.free(self.buffers);
+        self.event_queue.deinit();
         self.gpa.destroy(self);
     }
 
     /// Find a free buffer index, draining wl events (FIFO) until one frees.
-    pub fn acquire(self: *WaylandWsi) u32 {
-        var spins: usize = 0;
-        while (true) : (spins += 1) {
-            for (self.buffers, 0..) |b, i| {
-                if (b.free) return @intCast(i);
-            }
-            // None free: flush + dispatch pending releases, then retry. Give up
-            // after a bound and reuse index 0. Avoids a deadlock if the compositor
-            // never releases. Present is best-effort.
-            _ = wl_display_flush(self.display);
-            _ = wl_display_dispatch_pending(self.display);
-            if (spins > 1000) return 0;
+    pub fn acquire(self: *WaylandWsi, timeout: u64) !u32 {
+        try self.event_queue.pending();
+        while (true) {
+            for (self.buffers, 0..) |*buffer, i| if (buffer.free) {
+                buffer.free = false;
+                return @intCast(i);
+            };
+            if (timeout == 0) return error.NotReady;
+            try self.event_queue.wait(timeout);
         }
     }
 
@@ -300,7 +306,7 @@ pub const WaylandWsi = struct {
         );
         _ = wl_proxy_marshal_flags(
             self.surface,
-            WL_SURFACE_DAMAGE_BUFFER,
+            if (wl_proxy_get_version(self.surface) >= 4) WL_SURFACE_DAMAGE_BUFFER else WL_SURFACE_DAMAGE,
             null,
             wl_proxy_get_version(self.surface),
             0,

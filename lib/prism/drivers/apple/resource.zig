@@ -9,6 +9,7 @@ pub const Resource = struct {
     kind: hal.ResourceKind,
     bo: asahi.Bo,
     desc: hal.ResourceDesc,
+    byte_size: usize,
     // image-only metadata (zero for buffers), cached for the clear/present paths.
     width: u32 = 0,
     height: u32 = 0,

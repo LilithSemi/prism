@@ -70,6 +70,7 @@ pub const VkResult = enum(i32) {
     VK_ERROR_FORMAT_NOT_SUPPORTED = -11,
     // WSI (VK_KHR_swapchain): returned when a swapchain handle is retired/stale so
     // the app recreates it instead of the ICD dereferencing freed memory.
+    VK_ERROR_SURFACE_LOST_KHR = -1000000000,
     VK_SUBOPTIMAL_KHR = 1000001003,
     VK_ERROR_OUT_OF_DATE_KHR = -1000001004,
     _,
@@ -79,6 +80,7 @@ pub const VkStructureType = enum(i32) {
     VK_STRUCTURE_TYPE_APPLICATION_INFO = 0,
     VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO = 1,
     VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = 9,
+    VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2 = 1000145003,
     VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = 1000001000,
     VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = 1000001001,
     VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR = 1000006000,
@@ -414,6 +416,14 @@ pub const VK_NULL_HANDLE: u64 = 0;
 
 pub const VkDeviceCreateFlags = VkFlags;
 pub const VkDeviceQueueCreateFlags = VkFlags;
+
+pub const VkDeviceQueueInfo2 = extern struct {
+    sType: VkStructureType,
+    pNext: ?*const anyopaque,
+    flags: VkDeviceQueueCreateFlags,
+    queueFamilyIndex: u32,
+    queueIndex: u32,
+};
 
 pub const VkDeviceQueueCreateInfo = extern struct {
     sType: VkStructureType,

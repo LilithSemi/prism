@@ -13,6 +13,9 @@ const Command = union(enum) {
     clear: hal.Color,
     bind_pipeline: *hal.Pipeline,
     bind_vertex_buffer: *Resource,
+    set_depth_target: struct { resource: *Resource, clear: ?f32 },
+    bind_uniform_buffer: struct { binding: u32, resource: *Resource },
+    bind_texture: hal.TextureBinding,
     draw: struct { vertex_count: u32, first_vertex: u32 },
 };
 
@@ -46,6 +49,20 @@ pub const CommandBuffer = struct {
         const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
         self.cmds.append(self.gpa, .{ .draw = .{ .vertex_count = vertex_count, .first_vertex = first_vertex } }) catch return error.OutOfMemory;
     }
+    fn setDepthTarget(ptr: *anyopaque, depth: *hal.Resource, clear_value: ?f32) hal.Error!void {
+        const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
+        self.cmds.append(self.gpa, .{ .set_depth_target = .{ .resource = @ptrCast(@alignCast(depth)), .clear = clear_value } }) catch return error.OutOfMemory;
+    }
+    fn bindUniformBuffer(ptr: *anyopaque, binding: u32, buffer: *hal.Resource) hal.Error!void {
+        const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
+        if (binding >= 8) return error.Unsupported;
+        self.cmds.append(self.gpa, .{ .bind_uniform_buffer = .{ .binding = binding, .resource = @ptrCast(@alignCast(buffer)) } }) catch return error.OutOfMemory;
+    }
+    fn bindTexture(ptr: *anyopaque, binding: hal.TextureBinding) hal.Error!void {
+        const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
+        if (binding.binding >= 8 or binding.compare_enable or binding.lod_bias != 0 or binding.base_level != 0) return error.Unsupported;
+        self.cmds.append(self.gpa, .{ .bind_texture = binding }) catch return error.OutOfMemory;
+    }
     fn reset(ptr: *anyopaque) void {
         const self: *CommandBuffer = @ptrCast(@alignCast(ptr));
         self.cmds.clearRetainingCapacity();
@@ -63,6 +80,9 @@ pub const CommandBuffer = struct {
         .bindPipeline = &bindPipeline,
         .bindVertexBuffer = &bindVertexBuffer,
         .draw = &draw,
+        .setDepthTarget = &setDepthTarget,
+        .bindUniformBuffer = &bindUniformBuffer,
+        .bindTexture = &bindTexture,
         .reset = &reset,
         .deinit = &deinit,
     };
@@ -99,39 +119,77 @@ pub const Context = struct {
         var clear_color: ?hal.Color = null;
         var pipeline: ?*Pipeline = null;
         var vertex: ?*Resource = null;
+        var depth: ?Render.Depth = null;
+        var uniforms: [8]?*Resource = @splat(null);
+        var textures: [8]?hal.TextureBinding = @splat(null);
         var draws: [32]Render.Draw = undefined;
         var count: usize = 0;
         for (buf.cmds.items) |cmd| switch (cmd) {
             .set_render_target => |t| {
                 if (t.kind != .image) return error.InvalidArgument;
                 if (target == t) continue;
-                if (target) |old| try self.finishPass(old, clear_color, draws[0..count], execute);
+                if (target) |old| try self.finishPass(old, clear_color, draws[0..count], depth, execute);
                 target = t;
                 clear_color = null;
                 count = 0;
+                depth = null;
             },
             .clear => |c| {
                 const t = target orelse return error.InvalidArgument;
-                try self.finishPass(t, clear_color, draws[0..count], execute);
+                try self.finishPass(t, clear_color, draws[0..count], depth, execute);
+                if (depth) |*d| d.clear = null;
                 clear_color = c;
                 count = 0;
             },
             .bind_pipeline => |p| pipeline = @ptrCast(@alignCast(p)),
             .bind_vertex_buffer => |v| vertex = v,
+            .bind_uniform_buffer => |u| {
+                if (u.resource.kind != .buffer) return error.InvalidArgument;
+                uniforms[u.binding] = u.resource;
+            },
+            .bind_texture => |t| textures[t.binding] = t,
+            .set_depth_target => |d| {
+                if (d.resource.kind != .image or d.resource.format != .depth32_float) return error.InvalidArgument;
+                if (depth) |old| {
+                    if (old.resource == d.resource and d.clear == null) continue;
+                }
+                if (count != 0) {
+                    try self.finishPass(target.?, clear_color, draws[0..count], depth, execute);
+                    clear_color = null;
+                    count = 0;
+                }
+                depth = .{ .resource = d.resource, .clear = d.clear };
+            },
             .draw => |d| {
-                if (target == null or pipeline == null or vertex == null) return error.InvalidArgument;
-                if (count == draws.len) return error.Unsupported;
-                draws[count] = .{ .pipeline = pipeline.?, .vertex = vertex.?, .count = d.vertex_count, .first = d.first_vertex };
+                if (target == null or pipeline == null or (vertex == null and pipeline.?.stride != 0)) return error.InvalidArgument;
+                if (count == draws.len) {
+                    try self.finishPass(target.?, clear_color, draws[0..count], depth, execute);
+                    clear_color = null;
+                    if (depth) |*z| z.clear = null;
+                    count = 0;
+                }
+                draws[count] = .{ .pipeline = pipeline.?, .vertex = vertex, .count = d.vertex_count, .first = d.first_vertex, .uniforms = uniforms, .textures = textures };
                 count += 1;
             },
         };
-        try self.finishPass(target orelse return error.InvalidArgument, clear_color, draws[0..count], execute);
+        try self.finishPass(target orelse return error.InvalidArgument, clear_color, draws[0..count], depth, execute);
     }
 
-    fn finishPass(self: *Context, target: *Resource, color: ?hal.Color, draws: []const @import("render.zig").Draw, execute: bool) hal.Error!void {
+    fn finishPass(self: *Context, target: *Resource, color: ?hal.Color, draws: []const @import("render.zig").Draw, depth: ?@import("render.zig").Depth, execute: bool) hal.Error!void {
         if (draws.len != 0) {
             try @import("render.zig").validate(target, draws);
-            if (execute) try @import("render.zig").run(self.dev, target, color, draws);
+            if (execute) try @import("render.zig").run(self.dev, target, color, draws, depth);
+        } else if (depth != null and depth.?.clear != null) {
+            if (execute) {
+                if (color) |c| {
+                    try @import("render.zig").run(self.dev, target, c, &.{}, depth);
+                } else {
+                    // A depth-only clear must preserve the color attachment.
+                    const scratch = try self.dev.halDevice().createResource(target.desc);
+                    defer self.dev.halDevice().destroyResource(scratch);
+                    try @import("render.zig").run(self.dev, @ptrCast(@alignCast(scratch)), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, &.{}, depth);
+                }
+            }
         } else if (color) |c| {
             if (execute) try self.clearTarget(target, c);
         }

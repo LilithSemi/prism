@@ -8,16 +8,22 @@ pub const Pipeline = struct {
     fragment: graphics.Program,
     stride: u32,
     color_format: hal.Format,
+    depth: hal.DepthState,
+    cull: hal.CullState,
+    blend: hal.BlendState,
 
     pub fn create(gpa: std.mem.Allocator, desc: hal.PipelineDesc) hal.Error!*Pipeline {
+        if (desc.depth.bias_enable) return error.Unsupported;
         if (desc.color_format != .rgba8_unorm and desc.color_format != .bgra8_unorm) return error.Unsupported;
-        // Only implemented state is accepted. Defaults include triangle lists,
-        // no depth, no blending, one sample and no face culling.
+        // Reject state that the native render pass does not implement yet.
         const supported: hal.PipelineDesc = .{
             .vertex = desc.vertex,
             .fragment = desc.fragment,
             .vertex_layout = desc.vertex_layout,
             .color_format = desc.color_format,
+            .depth = desc.depth,
+            .cull = desc.cull,
+            .blend = desc.blend,
         };
         if (!std.meta.eql(desc, supported)) return error.Unsupported;
         const vs: *Shader = @ptrCast(@alignCast(desc.vertex));
@@ -26,12 +32,15 @@ pub const Pipeline = struct {
         const p = gpa.create(Pipeline) catch return error.OutOfMemory;
         errdefer gpa.destroy(p);
         p.vertex = try graphics.compile(gpa, vs.code, .vertex, desc.vertex_layout, desc.color_format);
-        p.fragment = try graphics.compile(gpa, fs.code, .fragment, desc.vertex_layout, desc.color_format);
+        p.fragment = try graphics.compileWithBlend(gpa, fs.code, .fragment, desc.vertex_layout, desc.color_format, desc.blend);
         for (p.fragment.inputs[0..p.fragment.input_count]) |slot| {
             if (p.vertex.outputs[slot] == null) return error.Unsupported;
         }
         p.stride = desc.vertex_layout.stride;
         p.color_format = desc.color_format;
+        p.depth = desc.depth;
+        p.cull = desc.cull;
+        p.blend = desc.blend;
         return p;
     }
 };
@@ -71,10 +80,10 @@ test "apple native graphics compiles changing SPIR-V and links interpolated colo
     try std.testing.expectEqual(@as(u32, 3), p.fragment.input_count);
     try std.testing.expect(p.vertex.len > 0 and p.fragment.len > 0);
     var unsupported = desc;
-    unsupported.blend.enable = true;
+    unsupported.samples = 4;
     try std.testing.expectError(error.Unsupported, Pipeline.create(gpa, unsupported));
     unsupported = desc;
-    unsupported.depth.test_enable = true;
+    unsupported.depth.bias_enable = true;
     try std.testing.expectError(error.Unsupported, Pipeline.create(gpa, unsupported));
 
     const textured = try glsl.compileForStage(gpa,
@@ -84,6 +93,7 @@ test "apple native graphics compiles changing SPIR-V and links interpolated colo
         \\void main() { gl_FragColor = texture2D(image, color.xy); }
     , .fragment);
     defer gpa.free(textured);
-    try std.testing.expectError(error.Unsupported, graphics.compile(gpa, textured, .fragment, desc.vertex_layout, desc.color_format));
+    const texture_program = try graphics.compile(gpa, textured, .fragment, desc.vertex_layout, desc.color_format);
+    try std.testing.expectEqual(@as(u8, 1 << 2), texture_program.texture_mask);
     try std.testing.expectError(error.Unsupported, graphics.compile(gpa, fs, .vertex, desc.vertex_layout, desc.color_format));
 }

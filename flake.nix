@@ -65,10 +65,13 @@
                   zig_0_17
                   pkg-config
                   vulkan-loader
+                  vulkan-tools
                 ]
                 ++ lib.optionals (stdenv.hostPlatform.isLinux) [
                   pkg-config
                   wayland
+                  glmark2
+                  mesa-demos
                 ]
               );
           };
