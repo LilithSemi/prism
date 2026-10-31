@@ -16,7 +16,7 @@ const supported = builtin.abi.isAndroid() or switch (builtin.os.tag) {
     else => false,
 };
 
-fn available(_: *anyopaque) bool {
+fn available(_: *anyopaque, _: std.Io) bool {
     return supported;
 }
 
@@ -38,5 +38,5 @@ pub const driver = drv.Driver{
 };
 
 test "Vulkan driver is available when compiled in" {
-    try std.testing.expectEqual(supported, driver.isAvailable());
+    try std.testing.expectEqual(supported, driver.isAvailable(std.testing.io));
 }

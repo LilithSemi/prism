@@ -1,21 +1,18 @@
 const std = @import("std");
 const hal = @import("../../hal.zig");
 
-/// A HAL shader module on the Apple Silicon (AGX) path. The AGX driver has no
-/// graphics-shader compiler, so only compute modules are real: a compute module
-/// wraps the caller's hand-assembled AGX kernel bytes (the bytecode dispatchCompute
-/// uploads to the kernel BO and launches). The bytes are copied into an owned
-/// buffer so the module outlives the caller's `code` slice.
-///
-/// .vertex / .fragment modules are rejected at createShaderModule (NotImplemented).
-/// The AGX graphics draw path is a documented hard open-item.
+/// Owned shader code. Graphics modules contain SPIR-V, lowered to native AGX
+/// during pipeline creation. Compute modules contain raw AGX kernel bytecode.
 pub const ShaderModule = struct {
     stage: hal.ShaderStage,
-    /// Owned copy of the AGX kernel bytecode (compute only).
+    /// Owned copy of the caller-supplied shader code.
     code: []u8,
 
     pub fn create(gpa: std.mem.Allocator, desc: hal.ShaderModuleDesc) hal.Error!*ShaderModule {
-        if (desc.stage != .compute) return error.NotImplemented;
+        if (desc.code.len == 0) return error.InvalidArgument;
+        if (desc.stage != .compute and (desc.code.len < 20 or desc.code.len % 4 != 0 or std.mem.readInt(u32, desc.code[0..4], .little) != 0x07230203)) return error.InvalidArgument;
+        if (desc.stage == .compute and desc.code.len >= 4 and std.mem.readInt(u32, desc.code[0..4], .little) == 0x07230203)
+            return error.Unsupported;
         const m = gpa.create(ShaderModule) catch return error.OutOfMemory;
         errdefer gpa.destroy(m);
         const owned = gpa.alloc(u8, desc.code.len) catch return error.OutOfMemory;
@@ -39,9 +36,9 @@ test "apple compute shader module wraps the AGX kernel bytes" {
     try std.testing.expectEqualSlices(u8, &bytes, m.code);
 }
 
-test "apple rejects vertex/fragment shader modules" {
+test "apple rejects malformed graphics shader modules" {
     const gpa = std.testing.allocator;
     const bytes: [8]u8 = @splat(0);
-    try std.testing.expectError(error.NotImplemented, ShaderModule.create(gpa, .{ .stage = .vertex, .code = &bytes }));
-    try std.testing.expectError(error.NotImplemented, ShaderModule.create(gpa, .{ .stage = .fragment, .code = &bytes }));
+    try std.testing.expectError(error.InvalidArgument, ShaderModule.create(gpa, .{ .stage = .vertex, .code = &bytes }));
+    try std.testing.expectError(error.InvalidArgument, ShaderModule.create(gpa, .{ .stage = .fragment, .code = &bytes }));
 }

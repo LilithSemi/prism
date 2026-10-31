@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) void {
                 fmod.linkSystemLibrary("wayland-client", .{});
             }
             b.installArtifact(b.addLibrary(.{ .name = fe.name, .root_module = fmod, .linkage = .dynamic }));
-            test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = fmod })).step);
+            test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = fmod, .filters = test_filters })).step);
         }
     }
 
@@ -166,7 +166,7 @@ pub fn build(b: *std.Build) void {
         const info_exe = b.addExecutable(.{ .name = "prism-info", .root_module = info_mod });
         b.installArtifact(info_exe);
         b.step("run-info", "Run prism-info").dependOn(&b.addRunArtifact(info_exe).step);
-        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = info_mod })).step);
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = info_mod, .filters = test_filters })).step);
     }
 
     // Triangle example: best available driver with a software fallback, presented

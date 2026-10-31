@@ -68,10 +68,8 @@ pub const CommandBuffer = struct {
     };
 };
 
-/// A GPU command context for the AGX path. Records go to a CommandBuffer. submit()
-/// replays them onto the GPU. The proven op is a clear over a render target via
-/// asahi clearColorTo. A recorded draw or pipeline bind returns NotImplemented
-/// (the AGX triangle draw is a documented hard open-item).
+/// Records are validated before GPU work, then replayed as synchronous native
+/// render passes. Draws without a clear preserve the target's existing pixels.
 pub const Context = struct {
     dev: *AppleDevice,
 
@@ -90,22 +88,66 @@ pub const Context = struct {
         const self: *Context = @ptrCast(@alignCast(ptr));
         const buf: *CommandBuffer = @ptrCast(@alignCast(cb.ptr));
 
-        // Replay the records: a bare clear runs the proven asahi clear render pass.
-        // Any draw or pipeline bind is rejected (the AGX draw path is not implemented).
-        var rt: ?*Resource = null;
-        var color: ?hal.Color = null;
-        var has_draw = false;
+        try self.replay(buf, false);
+        try self.replay(buf, true);
+    }
+
+    fn replay(self: *Context, buf: *CommandBuffer, execute: bool) hal.Error!void {
+        const Render = @import("render.zig");
+        const Pipeline = @import("pipeline.zig").Pipeline;
+        var target: ?*Resource = null;
+        var clear_color: ?hal.Color = null;
+        var pipeline: ?*Pipeline = null;
+        var vertex: ?*Resource = null;
+        var draws: [32]Render.Draw = undefined;
+        var count: usize = 0;
         for (buf.cmds.items) |cmd| switch (cmd) {
-            .set_render_target => |t| rt = t,
-            .clear => |c| color = c,
-            // A draw or its pipeline/vertex bind means the unsupported graphics draw path.
-            .bind_pipeline, .bind_vertex_buffer, .draw => has_draw = true,
+            .set_render_target => |t| {
+                if (t.kind != .image) return error.InvalidArgument;
+                if (target == t) continue;
+                if (target) |old| try self.finishPass(old, clear_color, draws[0..count], execute);
+                target = t;
+                clear_color = null;
+                count = 0;
+            },
+            .clear => |c| {
+                const t = target orelse return error.InvalidArgument;
+                try self.finishPass(t, clear_color, draws[0..count], execute);
+                clear_color = c;
+                count = 0;
+            },
+            .bind_pipeline => |p| pipeline = @ptrCast(@alignCast(p)),
+            .bind_vertex_buffer => |v| vertex = v,
+            .draw => |d| {
+                if (target == null or pipeline == null or vertex == null) return error.InvalidArgument;
+                if (count == draws.len) return error.Unsupported;
+                draws[count] = .{ .pipeline = pipeline.?, .vertex = vertex.?, .count = d.vertex_count, .first = d.first_vertex };
+                count += 1;
+            },
         };
-        if (has_draw) return error.NotImplemented;
+        try self.finishPass(target orelse return error.InvalidArgument, clear_color, draws[0..count], execute);
+    }
 
-        const target = rt orelse return error.InvalidArgument;
-        const c = color orelse return error.InvalidArgument;
+    fn finishPass(self: *Context, target: *Resource, color: ?hal.Color, draws: []const @import("render.zig").Draw, execute: bool) hal.Error!void {
+        if (draws.len != 0) {
+            try @import("render.zig").validate(target, draws);
+            if (execute) try @import("render.zig").run(self.dev, target, color, draws);
+        } else if (color) |c| {
+            if (execute) try self.clearTarget(target, c);
+        }
+    }
 
+    fn clearTarget(self: *Context, target: *Resource, c: hal.Color) hal.Error!void {
+        // AGX linear image strides must be multiples of 16 bytes (Mesa
+        // src/asahi/layout/layout.c). The library derives stride from width;
+        // use a padded temporary when the HAL's packed row is unaligned.
+        const width = std.mem.alignForward(u32, target.width, 4);
+        const temporary = if (width != target.width)
+            try self.dev.halDevice().createResource(.{ .buffer = .{ .size = @as(usize, width) * target.height * 4 } })
+        else
+            null;
+        defer if (temporary) |res| self.dev.halDevice().destroyResource(res);
+        const output: *Resource = if (temporary) |res| @ptrCast(@alignCast(res)) else target;
         // The clear render pass clears an arbitrary W x H RGBA8 image (the
         // size-dependent cmd_render/PBE/region-clip/isp_merge fields scale with
         // target.width/height). clearColorTo writes `c` to the target BO (its
@@ -114,12 +156,20 @@ pub const Context = struct {
             &self.dev.dev,
             self.dev.vm_id,
             self.dev.queue_id,
-            target.bo.gpu_va,
-            target.bo.size,
-            target.width,
+            output.bo.gpu_va,
+            output.bo.size,
+            width,
             target.height,
-            .{ c.r, c.g, c.b, c.a },
+            if (target.format == .bgra8_unorm) .{ c.b, c.g, c.r, c.a } else .{ c.r, c.g, c.b, c.a },
         ) catch |e| return aserr(e);
+        asahi.cleanInvalidateToPoC(output.bo.cpu);
+        if (temporary != null) {
+            const row = @as(usize, target.width) * 4;
+            for (0..target.height) |y| {
+                @memcpy(target.bo.cpu[y * row ..][0..row], output.bo.cpu[y * width * 4 ..][0..row]);
+            }
+            asahi.cleanToPoC(target.bo.cpu);
+        }
     }
 
     fn present(ptr: *anyopaque, surface: *hal.Surface, source: *hal.Resource) hal.Error!void {
@@ -127,6 +177,8 @@ pub const Context = struct {
         _ = self;
         const surf: *Surface = @ptrCast(@alignCast(surface));
         const src: *Resource = @ptrCast(@alignCast(source));
+        if (src.kind != .image) return error.InvalidArgument;
+        asahi.cleanInvalidateToPoC(src.bo.cpu);
 
         // The GPU wrote the source framebuffer (the clear's fence already flushed
         // it to memory). CPU-blit it into the platform surface's current buffer.
@@ -135,10 +187,11 @@ pub const Context = struct {
         const src_stride: u32 = src.width * 4; // linear RGBA8, 4 bytes/pixel
 
         const dstbuf = try surf.platform.currentBuffer();
+        if (dstbuf.format != .rgba8_unorm and dstbuf.format != .bgra8_unorm) return error.Unsupported;
         // The source render target is linear RGBA8 (byte0=R,1=G,2=B,3=A). A bgra8
         // surface buffer wants B,G,R,A: swap the red/blue lanes. An rgba8 buffer
         // blits straight across.
-        const swap = dstbuf.format == .bgra8_unorm;
+        const swap = dstbuf.format != src.format;
         const copy_w = @min(src_w, dstbuf.width);
         const copy_h = @min(src.height, dstbuf.height);
         var y: u32 = 0;
@@ -178,24 +231,24 @@ test {
     _ = @import("surface.zig");
 }
 
-test "apple command buffer records and a recorded draw submit returns NotImplemented" {
+test "apple draw without render state is rejected before touching the GPU" {
     // No GPU needed: drive only the record + the submit-replay's draw rejection by
     // building a Context shell over a fake device pointer that submit never
-    // dereferences before the has_draw check.
+    // dereferences before checking for a bound render target and vertex buffer.
     const gpa = std.testing.allocator;
 
     // A CommandBuffer that records a pipeline bind + a draw.
     const cb = try CommandBuffer.create(gpa);
     defer cb.deinit();
     // bindPipeline / draw take opaque pointers we never dereference here.
-    var dummy_pipe: u8 = 0;
+    var dummy_pipe: u64 = 0;
     try cb.bindPipeline(@ptrCast(&dummy_pipe));
     try cb.draw(3, 0);
 
     // submit must see the draw record and reject the whole submission.
     var devshell: AppleDevice = undefined;
     var ctx = Context{ .dev = &devshell };
-    try std.testing.expectError(error.NotImplemented, Context.submit(&ctx, cb));
+    try std.testing.expectError(error.InvalidArgument, Context.submit(&ctx, cb));
 }
 
 test "apple submit with neither RT nor clear is InvalidArgument (no GPU touched)" {
@@ -206,4 +259,55 @@ test "apple submit with neither RT nor clear is InvalidArgument (no GPU touched)
     var devshell: AppleDevice = undefined;
     var ctx = Context{ .dev = &devshell };
     try std.testing.expectError(error.InvalidArgument, Context.submit(&ctx, cb));
+}
+
+test "apple GPU clears multiple targets in order and presents both channel orders" {
+    const driver = @import("../apple.zig").driver;
+    if (!driver.isAvailable(std.testing.io)) return error.SkipZigTest;
+    const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
+    defer dev.deinit();
+    const ctx = try dev.createContext();
+    defer ctx.deinit();
+    const platform = @import("../../platform.zig");
+    const display = try platform.headless.create(std.testing.allocator);
+    defer display.deinit();
+
+    const rgba = try dev.createResource(.{ .image = .{ .width = 65, .height = 37, .format = .rgba8_unorm } });
+    defer dev.destroyResource(rgba);
+    const bgra = try dev.createResource(.{ .image = .{ .width = 65, .height = 37, .format = .bgra8_unorm } });
+    defer dev.destroyResource(bgra);
+    const cb = try ctx.beginCommands();
+    defer cb.deinit();
+    try cb.setRenderTarget(rgba);
+    try cb.clear(.{ .r = 1, .g = 0, .b = 0, .a = 1 });
+    try cb.setRenderTarget(bgra);
+    try cb.clear(.{ .r = 0, .g = 0, .b = 1, .a = 1 });
+    try ctx.submit(cb);
+    const red = [_]u8{ 255, 0, 0, 255 };
+    for ([_]*hal.Resource{ rgba, bgra }) |res| {
+        const bytes = try dev.mapResource(res);
+        var i: usize = 0;
+        while (i < bytes.len) : (i += 4) {
+            try std.testing.expectEqualSlices(u8, &red, bytes[i..][0..4]);
+        }
+    }
+
+    inline for (.{ hal.Format.rgba8_unorm, hal.Format.bgra8_unorm }) |format| {
+        var surface = try display.createSurface(.{ .width = 65, .height = 37, .format = format });
+        defer surface.deinit();
+        const hs = try dev.createSurface(@ptrCast(&surface));
+        defer dev.destroySurface(hs);
+        try ctx.present(hs, bgra);
+        const pixels = try surface.currentBuffer();
+        const expected = if (format == .rgba8_unorm) [_]u8{ 0, 0, 255, 255 } else red;
+        try std.testing.expectEqualSlices(u8, &expected, pixels.bytes[0..4]);
+    }
+
+    // Re-submit after all fixed-VA render infrastructure was released.
+    cb.reset();
+    try cb.setRenderTarget(rgba);
+    try cb.clear(.{ .r = 0, .g = 1, .b = 0, .a = 1 });
+    try ctx.submit(cb);
+    const green = [_]u8{ 0, 255, 0, 255 };
+    try std.testing.expectEqualSlices(u8, &green, (try dev.mapResource(rgba))[0..4]);
 }

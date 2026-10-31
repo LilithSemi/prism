@@ -10,6 +10,6 @@ Userspace graphics stack
 
 ## Drivers
 
-- Apple (Asahi, WIP)
+- Apple (Asahi)
 - NVIDIA
 - Software

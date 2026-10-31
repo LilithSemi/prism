@@ -9,7 +9,7 @@ const AppleDevice = @import("apple/device.zig").Device;
 const State = struct {};
 var state: State = .{};
 
-fn available(ptr: *anyopaque) bool {
+fn available(ptr: *anyopaque, io: std.Io) bool {
     _ = ptr;
     // The asahi DRM driver exists only on Linux. Probing it from a darwin build
     // runs Linux syscall numbers on the macOS kernel and the process dies with
@@ -20,7 +20,7 @@ fn available(ptr: *anyopaque) bool {
     // render node. If that succeeds, the from-scratch driver can drive it. On a
     // box without an AGX GPU (the aarch64 dev box) open() returns NoDevice and
     // this reports absent, so driver auto-selection falls through cleanly.
-    var dev = asahi.Device.open() catch return false;
+    var dev = asahi.Device.open(io) catch return false;
     dev.deinit();
     return true;
 }
@@ -50,12 +50,12 @@ test "apple driver: availability + device creation (skips without an AGX GPU)" {
     // Exercise the full path when an AGX GPU is present. Otherwise confirm it
     // reports absent (the no-AGX dev box path: createBestDevice falls through
     // cleanly, exactly like nvidia on a non-NVIDIA box). Does not require a GPU.
-    if (driver.isAvailable()) {
+    if (driver.isAvailable(std.testing.io)) {
         const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     } else {
         // On this no-AGX box availability is false and createDevice would fail to
         // open the node (the documented dev-box state).
-        try std.testing.expect(!driver.isAvailable());
+        try std.testing.expect(!driver.isAvailable(std.testing.io));
     }
 }

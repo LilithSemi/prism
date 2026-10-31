@@ -68,7 +68,8 @@ var state: State = .{};
 /// /dev/dri/renderD128.. for one whose /sys/class/drm/renderD<N>/device/driver
 /// symlink target basename is "virtio_gpu" (side-effect-free sysfs probe, no node opened).
 /// False on freestanding.
-fn available(ptr: *anyopaque) bool {
+fn available(ptr: *anyopaque, io: std.Io) bool {
+    _ = io;
     _ = ptr;
     if (!on_linux) return false;
     return hasVirtioGpuRenderNode();
@@ -115,7 +116,7 @@ test "virgl registry driver exposes its name and drm_driver" {
     try std.testing.expectEqualStrings("virtio_gpu", driver.drm_driver.?);
     // Availability needs a real virtio-gpu render node. Exercise the full path
     // when present, otherwise confirm createDevice is skipped cleanly.
-    if (driver.isAvailable()) {
+    if (driver.isAvailable(std.testing.io)) {
         const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     }

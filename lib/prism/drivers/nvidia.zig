@@ -9,7 +9,8 @@ const NvDevice = @import("nvidia/device.zig").Device;
 const State = struct {};
 var state: State = .{};
 
-fn available(ptr: *anyopaque) bool {
+fn available(ptr: *anyopaque, io: std.Io) bool {
+    _ = io;
     _ = ptr;
     // The nvidia control device exists only on Linux. Same guard as the apple
     // and virgl drivers: probing from a darwin build dies with SIGSYS.
@@ -33,7 +34,7 @@ test "nvidia driver exposes its name and a real device path" {
     try std.testing.expectEqualStrings("nvidia", driver.name);
     // Availability and device creation both need real hardware. Exercise the
     // full path when a GPU is present, otherwise just confirm it reports absent.
-    if (driver.isAvailable()) {
+    if (driver.isAvailable(std.testing.io)) {
         const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
         dev.deinit();
     }
