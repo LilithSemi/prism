@@ -107,9 +107,9 @@ pub fn build(b: *std.Build) void {
     // One test runner: the prism module pulls in every internal test via its
     // file-path import graph (lib/prism.zig references the test-only files too).
     const test_step = b.step("test", "Run all Prism tests");
-    const test_filter = b.option([]const u8, "test-filter", "Only run tests whose name contains this substring");
-    const test_filters: []const []const u8 = if (test_filter) |f| &.{f} else &.{};
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = prism, .filters = test_filters })).step);
+    const prism_tests = b.addRunArtifact(b.addTest(.{ .root_module = prism }));
+    prism_tests.addPassthruArgs();
+    test_step.dependOn(&prism_tests.step);
 
     // The GLX vendor, EGL/GLVND vendor, and Vulkan ICD shared libraries.
     if (!target.result.cpu.arch.isWasm() and target.result.os.tag != .uefi and !target.result.abi.isAndroid()) {
@@ -149,7 +149,9 @@ pub fn build(b: *std.Build) void {
                 fmod.linkSystemLibrary("wayland-client", .{});
             }
             b.installArtifact(b.addLibrary(.{ .name = fe.name, .root_module = fmod, .linkage = .dynamic }));
-            test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = fmod, .filters = test_filters })).step);
+            const frontend_tests = b.addRunArtifact(b.addTest(.{ .root_module = fmod }));
+            frontend_tests.addPassthruArgs();
+            test_step.dependOn(&frontend_tests.step);
         }
     }
 
@@ -166,7 +168,9 @@ pub fn build(b: *std.Build) void {
         const info_exe = b.addExecutable(.{ .name = "prism-info", .root_module = info_mod });
         b.installArtifact(info_exe);
         b.step("run-info", "Run prism-info").dependOn(&b.addRunArtifact(info_exe).step);
-        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = info_mod, .filters = test_filters })).step);
+        const info_tests = b.addRunArtifact(b.addTest(.{ .root_module = info_mod }));
+        info_tests.addPassthruArgs();
+        test_step.dependOn(&info_tests.step);
     }
 
     // Triangle example: best available driver with a software fallback, presented

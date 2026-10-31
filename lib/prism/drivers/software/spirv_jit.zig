@@ -10,6 +10,9 @@ const ir = @import("vulcan-ir");
 const gpu = @import("vulcan-gpu");
 const front = @import("../../spirv.zig");
 
+/// Parse a CPU shader using Prism's host sampler descriptor and LOD ABI.
+pub const parseSpirv = @import("spirv_sampling.zig").parse;
+
 /// The native (host-arch) JIT backend. `target.native` dispatches to
 /// aarch64/x86_64/x86/riscv64 codegen by `builtin.cpu.arch` at comptime.
 const native = target.native;
@@ -683,6 +686,43 @@ fn traceTexCoordSlots(func: *const front.Function, entry: ir.function.Block) [2]
     return .{ null, null };
 }
 
+/// Keep the CPU sampler's implicit-LOD sentinel through quad widening. Vulcan
+/// treats literal zero as an implicit-LOD marker, so protect an explicit zero
+/// with a nonconstant identity expression. Otherwise quad helper lanes outside
+/// a primitive can spuriously change a requested base-level sample's LOD.
+fn prepareQuadSampling(func: *front.Function) !void {
+    const f32_ty = try func.types.intern(.{ .float = .f32 });
+    for (0..func.blockCount()) |bi| {
+        const block: ir.function.Block = @enumFromInt(bi);
+        const snapshot = try func.allocator.dupe(ir.function.Inst, func.blockInsts(block));
+        defer func.allocator.free(snapshot);
+        var rewritten: std.ArrayListUnmanaged(ir.function.Inst) = .empty;
+        defer rewritten.deinit(func.allocator);
+        for (snapshot) |inst| {
+            const opcode = func.opcode(inst);
+            if (opcode == .call_indirect and isSamplerFnParam(func, opcode.call_indirect.target)) {
+                var call = opcode.call_indirect;
+                const original = func.valueList(call.args);
+                if (original.len == 5) {
+                    var args: [5]ir.function.Value = undefined;
+                    @memcpy(&args, original);
+                    if (func.definingInst(args[3])) |definition| {
+                        const lod = func.opcode(definition);
+                        if (lod == .fconst and lod.fconst == 0) {
+                            args[3] = try func.createInst(f32_ty, .{ .arith = .{ .op = .add, .lhs = args[3], .rhs = args[3] } });
+                            try rewritten.append(func.allocator, func.definingInst(args[3]).?);
+                            call.args = try func.internValues(&args);
+                            func.opcodeMut(inst).* = .{ .call_indirect = call };
+                        }
+                    }
+                }
+            }
+            try rewritten.append(func.allocator, inst);
+        }
+        try func.setBlockInsts(block, rewritten.items);
+    }
+}
+
 // 4-wide quad fragment shading.
 //
 // An optional fragment-shader entry that shades a 2x2 pixel quad (4 fragments) at
@@ -769,6 +809,7 @@ pub fn rewriteGraphicsQuad(func: *front.Function) !GfxInfo {
 
     // Widen f32 -> <4 x f32> throughout (vulcan, at the root). Bails (NotWidenable) if the FS
     // is outside both the straight-line and the heavy (broadcast/gather/flatten) subsets.
+    try prepareQuadSampling(func);
     try spirv.widenGraphics(func);
 
     // Re-point every tagged color-output store (now of a <4 x f32>) to qout + comp*16.
@@ -1058,7 +1099,7 @@ test "spirv compute control flow: a glslang for-loop + if JITs and runs natively
     // stored/loaded across blocks. The multi-block mem2reg (SSA + OpPhi) path handles this.
     const spv align(4) = @embedFile("vkcf_test.spv").*;
 
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
 
     var compiled = try jitFunction(gpa, &func, "main");
@@ -1104,7 +1145,7 @@ test "spirv compute: x*y - x parses, JITs, and runs natively" {
     try b.emit(gpa, op.FunctionEnd, &.{});
 
     // SPIR-V bytes -> Vulcan IR (via the shared parseSpirv front end).
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     // Vulcan IR -> AArch64 (isel + link) -> mapped W^X image, callable in-process.
@@ -1155,7 +1196,7 @@ test "spirv graphics: a channel-rotate fragment shader JITs and runs natively" {
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -1227,7 +1268,7 @@ fn assertQuadMatchesScalarCfg(gpa: std.mem.Allocator, fs_code: []const u8, nin: 
     const empty_tex: sampler.TexDesc = .{ .pixels = undefined, .width = 0, .height = 0, .pitch = 0 };
 
     // Scalar reference: JIT the scalar-rewritten FS, run it per fragment.
-    var sfunc = try front.parseSpirv(gpa, fs_code);
+    var sfunc = try parseSpirv(gpa, fs_code);
     defer sfunc.deinit();
     const sinfo = try rewriteGraphics(&sfunc);
     try std.testing.expectEqual(GfxStage.fragment, sinfo.stage);
@@ -1246,7 +1287,7 @@ fn assertQuadMatchesScalarCfg(gpa: std.mem.Allocator, fs_code: []const u8, nin: 
     }
 
     // Quad: JIT the widened FS, run all 4 fragments at once.
-    var qfunc = try front.parseSpirv(gpa, fs_code);
+    var qfunc = try parseSpirv(gpa, fs_code);
     defer qfunc.deinit();
     const qinfo = try rewriteGraphicsQuad(&qfunc);
     try std.testing.expectEqual(sinfo.input_count, qinfo.input_count);
@@ -1431,9 +1472,13 @@ fn buildClampFs(gpa: std.mem.Allocator) ![]u32 {
 /// sample. ids: void1 fnty2 f32=3 v2=4 v4=5 img6 simg7 pUV8 pImg9 pOut10 uvv11 simgv12 outv13
 /// main14 entry15 uvld16 imld17 samp18. The sampler descriptor + sampler_fn become 2 ptr params.
 fn buildTexturedFs(gpa: std.mem.Allocator) ![]u32 {
+    return buildTexturedFsLod(gpa, null);
+}
+
+fn buildTexturedFsLod(gpa: std.mem.Allocator, lod: ?f32) ![]u32 {
     const op = spirv.opcodes;
     const sc = op.StorageClass;
-    var b = try spirv.binary.Builder.init(gpa, 19);
+    var b = try spirv.binary.Builder.init(gpa, if (lod != null) 20 else 19);
     defer b.deinit(gpa);
     try b.emit(gpa, op.EntryPoint, &.{ op.ExecutionModel.fragment, 14, 0, 11, 13 });
     try b.emit(gpa, op.Decorate, &.{ 11, op.Decoration.location, 0 });
@@ -1453,11 +1498,16 @@ fn buildTexturedFs(gpa: std.mem.Allocator) ![]u32 {
     try b.emit(gpa, op.Variable, &.{ 8, 11, sc.input });
     try b.emit(gpa, op.Variable, &.{ 9, 12, sc.uniform_constant });
     try b.emit(gpa, op.Variable, &.{ 10, 13, sc.output });
+    if (lod) |level| try b.emit(gpa, op.Constant, &.{ 3, 19, @bitCast(level) });
     try b.emit(gpa, op.Function, &.{ 1, 14, 0, 2 });
     try b.emit(gpa, op.Label, &.{15});
     try b.emit(gpa, op.Load, &.{ 7, 17, 12 }); // sampledImage = load sampler
     try b.emit(gpa, op.Load, &.{ 4, 16, 11 }); // uv
-    try b.emit(gpa, op.ImageSampleImplicitLod, &.{ 5, 18, 17, 16 }); // texture(s, uv)
+    if (lod != null) {
+        try b.emit(gpa, op.ImageSampleExplicitLod, &.{ 5, 18, 17, 16, 2, 19 });
+    } else {
+        try b.emit(gpa, op.ImageSampleImplicitLod, &.{ 5, 18, 17, 16 });
+    }
     try b.emit(gpa, op.Store, &.{ 13, 18 });
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
@@ -1562,14 +1612,14 @@ test "spirv graphics quad REPRO: glmark2 phong (normalize+dot+max+pow) - sweep N
     const fs = try glsl.compileForStage(gpa, src, .fragment);
     defer gpa.free(fs);
 
-    var sfunc = try front.parseSpirv(gpa, fs);
+    var sfunc = try parseSpirv(gpa, fs);
     defer sfunc.deinit();
     const sinfo = try rewriteGraphics(&sfunc);
     var scompiled = try jitFunction(gpa, &sfunc, "main");
     defer scompiled.deinit();
     const sentry = mainEntry(&scompiled) orelse return error.NoEntry;
 
-    var qfunc = try front.parseSpirv(gpa, fs);
+    var qfunc = try parseSpirv(gpa, fs);
     defer qfunc.deinit();
     const qinfo = try rewriteGraphicsQuad(&qfunc);
     var qcompiled = try jitFunction(gpa, &qfunc, "main");
@@ -1651,6 +1701,57 @@ test "spirv graphics quad HEAVY: a TEXTURED FS (sampler gather) - 4-wide SIMD ma
     }, .{ .tex = &tex }, 0);
 }
 
+test "CPU texture LOD preserves fractional implicit requests and explicit zero through scalar and SIMD JIT" {
+    const gpa = std.testing.allocator;
+    // A uniformly red base and blue mip make the selected LOD observable.
+    var pixels = [_]u8{
+        255, 0, 0,   255, 255, 0, 0, 255,
+        255, 0, 0,   255, 255, 0, 0, 255,
+        0,   0, 255, 255,
+    };
+    var tex: sampler.TexDesc = .{
+        .pixels = &pixels,
+        .width = 2,
+        .height = 2,
+        .pitch = 8,
+        .levels = 2,
+        .mip_filter = .linear,
+        .implicit_lod = 0.25,
+    };
+    tex.level_off[1] = 16;
+    const cases = [_]struct { lod: ?f32, expected: [4]f32 }{
+        .{ .lod = null, .expected = .{ 0.75, 0, 0.25, 1 } },
+        .{ .lod = 0, .expected = .{ 1, 0, 0, 1 } },
+        .{ .lod = 0.5, .expected = .{ 0.5, 0, 0.5, 1 } },
+    };
+    for (cases) |case| {
+        const words = try buildTexturedFsLod(gpa, case.lod);
+        defer gpa.free(words);
+        const code = std.mem.sliceAsBytes(words);
+        var func = try parseSpirv(gpa, code);
+        defer func.deinit();
+        const info = try rewriteGraphics(&func);
+        // Implicit LOD is a host request, not extra shader gradient inputs or
+        // reads from a different backend's texture-descriptor layout.
+        try std.testing.expectEqual(@as(usize, 0), info.grad_count);
+        try std.testing.expectEqual(@as(usize, 2), info.buffer_count);
+        var compiled = try jitFunction(gpa, &func, "main");
+        defer compiled.deinit();
+        const entry = mainEntry(&compiled) orelse return error.NoEntry;
+        var bufs: [GfxBuffers.max]?[*]const u8 = @splat(null);
+        const count = bindBufs(info.buffer_kinds[0..info.buffer_count], .{ .tex = &tex }, &tex, &bufs);
+        var out: [GfxOut.fragment_len]f32 = @splat(0);
+        try runGraphicsAt(entry, info.input_count, count, &.{ 0.5, 0.5 }, bufs[0..count], &out);
+        for (case.expected, out[0..4]) |expected, actual|
+            try std.testing.expectApproxEqAbs(expected, actual, 1e-6);
+        // Large quad-coordinate deltas must not override the rasterizer's
+        // fractional implicit LOD or an explicitly requested base level.
+        try assertQuadMatchesScalarCfg(gpa, code, 2, .{
+            &.{ 0, 0 }, &.{ 20, 0 }, &.{ 0, 20 }, &.{ 20, 20 },
+        }, .{ .tex = &tex }, 0);
+    }
+}
+
 test "spirv graphics quad HEAVY: a DERIVATIVE FS (grad_buf broadcast) - 4-wide SIMD matches scalar" {
     const gpa = std.testing.allocator;
     const fs = try buildDerivFs(gpa);
@@ -1673,7 +1774,7 @@ test "spirv graphics quad HEAVY: the REAL vkcube FS - 4-wide SIMD matches scalar
 
     // The grad_buf holds a non-degenerate per-triangle gradient so normalize(cross(dFdx,dFdy))
     // is well-defined. We read the grad layout off the scalar info (same for the quad).
-    var sf = try front.parseSpirv(gpa, raw);
+    var sf = try parseSpirv(gpa, raw);
     defer sf.deinit();
     const si = try rewriteGraphics(&sf);
     var min_vi: u32 = std.math.maxInt(u32);
@@ -1739,7 +1840,7 @@ test "spirv graphics: a flat-normal FS (dFdx/dFdy + cross + normalize) JITs + ru
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -1784,7 +1885,7 @@ test "spirv graphics: vkcube's real fragment shader inlines, lowers, JITs, and E
     // non-entry block. rewriteGraphics now re-points tagged output stores in every block (not
     // just the entry), so the stores hit `outbuf + idx*4` instead of the literal slot-iconst
     // (a `color_out=0` store to the literal address 0 was the `str s15, [x28]` x28==0 fault).
-    var func = try front.parseSpirv(gpa, raw);
+    var func = try parseSpirv(gpa, raw);
     defer func.deinit();
     const info = try rewriteGraphics(&func);
     try std.testing.expectEqual(GfxStage.fragment, info.stage);
@@ -1897,7 +1998,7 @@ test "spirv graphics: a FS using pow() JITs, calls the host math_fn, runs native
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -1945,7 +2046,7 @@ test "spirv graphics: a discarding FS calls the host discard_fn and sets the kil
     try b.emit(gpa, op.Kill, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -1993,7 +2094,7 @@ test "spirv graphics: a FS reading gl_FragCoord classifies its builtin inputs + 
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -2046,7 +2147,7 @@ test "spirv graphics: a FS writing gl_FragDepth routes it to the depth output sl
     try b.emit(gpa, op.Return, &.{});
     try b.emit(gpa, op.FunctionEnd, &.{});
 
-    var func = try front.parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
+    var func = try parseSpirv(gpa, std.mem.sliceAsBytes(b.words.items));
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -2074,7 +2175,7 @@ test "spirv graphics: a UBO mat4-MVP vertex shader JITs, reads the uniform, runs
     // (pattern B), all lowered natively by vulcan-spirv, no Prism rewrite.
     const spv align(4) = @embedFile("vkubo_vert.spv").*;
 
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
 
     const info = try rewriteGraphics(&func);
@@ -2119,7 +2220,7 @@ test "control flow: a glslang for-loop accumulator JITs + runs (loop-carried + p
     // for(i<n) acc += i*2; out[gid]=acc, n=in[gid]. A loop-carried `acc` (loop-header phi)
     // plus a back-edge and a per-iteration use of the induction variable `i`.
     const spv align(4) = @embedFile("loop.spv").*;
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
     var compiled = try jitFunction(gpa, &func, "main");
     defer compiled.deinit();
@@ -2143,7 +2244,7 @@ test "control flow: a glslang nested if JITs + runs (selection within selection)
     // if(x<10){ if((x&1)==0) r=x*2 else r=x*3 } else { r=x+100 }. Nested OpSelectionMerge +
     // OpBranchConditional with merge-block phis for `r`.
     const spv align(4) = @embedFile("nested.spv").*;
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
     var compiled = try jitFunction(gpa, &func, "main");
     defer compiled.deinit();
@@ -2167,7 +2268,7 @@ test "control flow: a glslang OpSwitch JITs + runs (case + default, merge phi)" 
     // switch(x){case 0:100; case 1:200; case 2:300; default:x*10}. OpSwitch lowered to an
     // equality-test chain in vulcan; the merge block's `r` phi has the case blocks as preds.
     const spv align(4) = @embedFile("switch.spv").*;
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
     var compiled = try jitFunction(gpa, &func, "main");
     defer compiled.deinit();
@@ -2188,7 +2289,7 @@ test "control flow: the vkflow FS (loop + per-iteration conditional) JITs + runs
     // A loop with a loop-carried vec3 accumulator + a per-iteration conditional, in a graphics
     // (fragment) shader run through rewriteGraphics + the JIT.
     const spv align(4) = @embedFile("flow.frag.spv").*;
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
     const info = try rewriteGraphics(&func);
     try std.testing.expectEqual(GfxStage.fragment, info.stage);
@@ -2214,7 +2315,7 @@ test "control flow: a FS vector loop-carried accumulator JITs + runs (vector phi
     // FS: vec3 c=0; for(i<3) c += vec3(0.1*i, 0.2, 0.05); o=vec4(c,1). The loop-carried value
     // is a vector (scalarized vector phi at the loop header).
     const spv align(4) = @embedFile("vecloop.frag.spv").*;
-    var func = try front.parseSpirv(gpa, &spv);
+    var func = try parseSpirv(gpa, &spv);
     defer func.deinit();
     const info = try rewriteGraphics(&func);
     var compiled = try jitFunction(gpa, &func, "main");

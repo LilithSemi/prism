@@ -8,7 +8,6 @@ const std = @import("std");
 pub var disable_quad_diag: bool = false;
 const hal = @import("../../hal.zig");
 const ShaderModule = @import("shader.zig").ShaderModule;
-const spirv = @import("../../spirv.zig");
 const spirv_jit = @import("spirv_jit.zig");
 const target = @import("vulcan-target");
 
@@ -146,13 +145,13 @@ pub const Pipeline = struct {
         const vs_code = self.vertex.compute_spirv orelse return;
         const fs_code = self.fragment.compute_spirv orelse return;
 
-        var vfunc = spirv.parseSpirv(gpa, vs_code) catch return;
+        var vfunc = spirv_jit.parseSpirv(gpa, vs_code) catch return;
         defer vfunc.deinit();
         const vinfo = spirv_jit.rewriteGraphics(&vfunc) catch return;
         if (vinfo.stage != .vertex) return;
         var vcompiled = spirv_jit.jitFunction(gpa, &vfunc, "main") catch return;
 
-        var ffunc = spirv.parseSpirv(gpa, fs_code) catch {
+        var ffunc = spirv_jit.parseSpirv(gpa, fs_code) catch {
             vcompiled.deinit();
             return;
         };
@@ -204,7 +203,7 @@ pub const Pipeline = struct {
 
     fn buildQuad(prog: *ShaderProgram, gpa: std.mem.Allocator, fs_code: []const u8) void {
         if (disable_quad_diag) return; // DIAG: force the scalar FS path
-        var qfunc = spirv.parseSpirv(gpa, fs_code) catch return;
+        var qfunc = spirv_jit.parseSpirv(gpa, fs_code) catch return;
         defer qfunc.deinit();
         _ = spirv_jit.rewriteGraphicsQuad(&qfunc) catch return;
         var qcompiled = spirv_jit.jitFunction(gpa, &qfunc, "main") catch return;

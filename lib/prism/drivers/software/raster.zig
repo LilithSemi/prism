@@ -1531,7 +1531,6 @@ test "quad SIMD rasterization matches the scalar per-fragment path over a whole 
     // bit-exact by the spirv_jit equivalence tests. The only possible difference is
     // float-reorder in the rasterizer's incremental barycentric interpolation, which must
     // be sub-1-LSB (<= 1/255) for a correct vectorization.
-    const front = @import("../../spirv.zig");
     const vspirv = @import("vulcan-spirv");
     const op = vspirv.opcodes;
     const sc = op.StorageClass;
@@ -1566,14 +1565,14 @@ test "quad SIMD rasterization matches the scalar per-fragment path over a whole 
     const fs_code = std.mem.sliceAsBytes(b.words.items);
 
     // Scalar FS entry.
-    var sfunc = try front.parseSpirv(gpa, fs_code);
+    var sfunc = try spirv_jit.parseSpirv(gpa, fs_code);
     defer sfunc.deinit();
     const sinfo = try spirv_jit.rewriteGraphics(&sfunc);
     var scompiled = try spirv_jit.jitFunction(gpa, &sfunc, "main");
     defer scompiled.deinit();
 
     // Quad FS entry.
-    var qfunc = try front.parseSpirv(gpa, fs_code);
+    var qfunc = try spirv_jit.parseSpirv(gpa, fs_code);
     defer qfunc.deinit();
     _ = try spirv_jit.rewriteGraphicsQuad(&qfunc);
     var qcompiled = try spirv_jit.jitFunction(gpa, &qfunc, "main");
@@ -1708,12 +1707,11 @@ test "rasterShadedFmt blends a translucent fragment over a pre-cleared destinati
     // Full-rasterizer blend oracle: a flat (1,0,0,0.5) fragment shaded over a buffer
     // pre-cleared to blue (0,0,1,1) with SRC_ALPHA/ONE_MINUS_SRC_ALPHA, FUNC_ADD must
     // give (0.5, 0, 0.5, 0.75) inside the triangle. Disabled blend overwrites with src.
-    const front = @import("../../spirv.zig");
     const gpa = std.testing.allocator;
 
     const fs_code = try buildFlatColorFs(gpa, .{ 1.0, 0.0, 0.0, 0.5 });
     defer gpa.free(fs_code);
-    var ffunc = try front.parseSpirv(gpa, std.mem.sliceAsBytes(fs_code));
+    var ffunc = try spirv_jit.parseSpirv(gpa, std.mem.sliceAsBytes(fs_code));
     defer ffunc.deinit();
     const finfo = try spirv_jit.rewriteGraphics(&ffunc);
     var fcompiled = try spirv_jit.jitFunction(gpa, &ffunc, "main");
@@ -1767,7 +1765,6 @@ test "rasterShadedFmt blends a translucent fragment over a pre-cleared destinati
 }
 
 test "rasterShadedFmt MRT writes each color output to its own target" {
-    const front = @import("../../spirv.zig");
     const spirv = @import("vulcan-spirv");
     const gpa = std.testing.allocator;
     const op = spirv.opcodes;
@@ -1802,7 +1799,7 @@ test "rasterShadedFmt MRT writes each color output to its own target" {
     b.deinit(gpa);
     defer gpa.free(words);
 
-    var ffunc = try front.parseSpirv(gpa, std.mem.sliceAsBytes(words));
+    var ffunc = try spirv_jit.parseSpirv(gpa, std.mem.sliceAsBytes(words));
     defer ffunc.deinit();
     const finfo = try spirv_jit.rewriteGraphics(&ffunc);
     var fcompiled = try spirv_jit.jitFunction(gpa, &ffunc, "main");

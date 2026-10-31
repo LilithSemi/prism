@@ -3661,7 +3661,7 @@ fn runDepthRange(dpy_magic: usize) !void {
 
 // GPU per-draw throughput micro-benchmark. Skipped unless PRISM_BENCH is set (it forces the
 // nvidia driver + needs the real GPU, and adds ~1000 GPU draws to a suite run). Run it with:
-//   PRISM_BENCH=1 zig build test -Dtest-filter="perf bench: nvidia per-draw"
+//   PRISM_BENCH=1 zig build test
 // It reports us/draw + draws/s for the immediate-mode glDrawArrays path (begin/record/submit/
 // fence per draw). Kept as a regression guard for the per-draw CPU cost work (scratch vertex
 // buffer + pooled command buffer removed the per-draw alloc/free churn: ~57 -> ~33 us/draw).
