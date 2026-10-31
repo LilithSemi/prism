@@ -76,15 +76,15 @@ fn copyCStr(dst: []u8, src: []const u8) void {
 }
 
 /// Build the list of physical devices: one per available compiled-in driver.
-fn enumerateAvailable() ![]PhysicalDevice {
+fn enumerateAvailable(io: std.Io) ![]PhysicalDevice {
     var count: usize = 0;
     for (prism.drivers.all) |d| {
-        if (d.isAvailable()) count += 1;
+        if (d.isAvailable(io)) count += 1;
     }
     const list = try allocator.alloc(PhysicalDevice, count);
     var i: usize = 0;
     for (prism.drivers.all, 0..) |d, idx| {
-        if (!d.isAvailable()) continue;
+        if (!d.isAvailable(io)) continue;
         list[i] = .{ .loader_magic = vk.ICD_LOADER_MAGIC, .driver_index = @intCast(idx) };
         i += 1;
     }
@@ -150,7 +150,9 @@ pub fn createInstance(
     _ = pCreateInfo;
     _ = pAllocator;
     const inst = allocator.create(Instance) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
-    const phys = enumerateAvailable() catch {
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const phys = enumerateAvailable(threaded.io()) catch {
         allocator.destroy(inst);
         return .VK_ERROR_OUT_OF_HOST_MEMORY;
     };
@@ -385,6 +387,7 @@ pub fn getPhysicalDeviceSparseImageFormatProperties(
 /// embedded `queue` is the single device queue we expose (family 0, index 0).
 pub const LogicalDevice = extern struct {
     loader_magic: usize,
+    io_runtime: *std.Io.Threaded,
     queue: Queue,
     /// The Prism HAL device fat-pointer, split into its two words so the struct
     /// stays `extern` (Vulkan dispatchable handles must be extern with the magic
@@ -459,12 +462,21 @@ pub fn createDevice(
     const d = prism.drivers.all[pd.driver_index];
     // Bring up the real HAL device for this driver. The ICD .so is libc-free, so
     // the HAL device's backing allocator is page_allocator (same as our own).
-    const hal_dev = d.createDevice(allocator, prism.hal.defaultIo()) catch return .VK_ERROR_INITIALIZATION_FAILED;
+    const runtime = allocator.create(std.Io.Threaded) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
+    runtime.* = .init(allocator, .{});
+    const hal_dev = d.createDevice(allocator, runtime.io()) catch {
+        runtime.deinit();
+        allocator.destroy(runtime);
+        return .VK_ERROR_INITIALIZATION_FAILED;
+    };
     const dev = allocator.create(LogicalDevice) catch {
         hal_dev.deinit();
+        runtime.deinit();
+        allocator.destroy(runtime);
         return .VK_ERROR_OUT_OF_HOST_MEMORY;
     };
     dev.* = .{
+        .io_runtime = runtime,
         .loader_magic = vk.ICD_LOADER_MAGIC,
         .queue = .{ .loader_magic = vk.ICD_LOADER_MAGIC },
         .hal_ptr = hal_dev.ptr,
@@ -482,6 +494,8 @@ pub fn destroyDevice(
     if (device == null) return;
     const dev = LogicalDevice.fromHandle(device);
     dev.hal().deinit();
+    dev.io_runtime.deinit();
+    allocator.destroy(dev.io_runtime);
     allocator.destroy(dev);
 }
 
@@ -5114,7 +5128,8 @@ fn makePassthroughShaders(device: vk.VkDevice) ?struct { vs: vk.VkShaderModule, 
 test "push constants: layout range parsed, pushed bytes stored, per-draw snapshot is draw-time state" {
     // The reported maxPushConstantsSize must be usable (>= the spec minimum 128).
     var props: vk.VkPhysicalDeviceProperties = undefined;
-    const insts = enumerateAvailable() catch return error.SkipZigTest;
+    const insts = enumerateAvailable(std.testing.io) catch return error.SkipZigTest;
+    defer allocator.free(insts);
     if (insts.len == 0) return error.SkipZigTest;
     // Find the software physical device.
     var phys: ?*PhysicalDevice = null;

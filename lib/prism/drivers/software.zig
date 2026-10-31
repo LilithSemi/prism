@@ -8,7 +8,8 @@ const SwDevice = @import("software/device.zig").Device;
 const State = struct {};
 var state: State = .{};
 
-fn available(ptr: *anyopaque) bool {
+fn available(ptr: *anyopaque, io: std.Io) bool {
+    _ = io;
     _ = ptr;
     return true;
 }

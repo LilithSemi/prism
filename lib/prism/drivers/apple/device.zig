@@ -4,7 +4,7 @@ const hal = @import("../../hal.zig");
 const Resource = @import("resource.zig").Resource;
 const ShaderModule = @import("shader.zig").ShaderModule;
 
-/// Map an asahi (subproject/asahi) transport error onto the Prism-wide error set.
+/// Map an asahi (asahi.zig) transport error onto the Prism-wide error set.
 pub fn aserr(e: anyerror) hal.Error {
     return switch (e) {
         error.OpenFailed, error.NoDevice => error.InitializationFailed,
@@ -27,7 +27,7 @@ const PAGE: u64 = asahi.PAGE; // 0x4000
 const RESOURCE_VA_BASE: u64 = 0x2_0000_0000;
 
 /// HAL device backed by a real Apple Silicon (AGX) GPU via the kernel `asahi` DRM
-/// driver (subproject/asahi). Owns the render node, a GPU VM, and a submission
+/// driver (asahi.zig). Owns the render node, a GPU VM, and a submission
 /// queue with usc_exec_base = USC_EXEC_BASE (so the clear render pass's USC-relative
 /// addresses resolve). Resources are GEM BOs bound into the VM at bump-allocated
 /// 16-KiB-aligned VAs. destroyResource releases each BO (freeBo: VM_BIND/UNBIND +
@@ -44,6 +44,10 @@ pub const Device = struct {
     /// the render-infra range so resource VAs never collide with it.
     next_va: u64 = RESOURCE_VA_BASE,
 
+    pub fn halDevice(self: *Device) hal.Device {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
     pub fn create(gpa: std.mem.Allocator, io: std.Io) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
         errdefer gpa.destroy(self);
@@ -51,7 +55,7 @@ pub const Device = struct {
         self.io = io;
         self.next_va = RESOURCE_VA_BASE;
 
-        self.dev = asahi.Device.open() catch |e| return aserr(e);
+        self.dev = asahi.Device.open(io) catch |e| return aserr(e);
         errdefer self.dev.deinit();
         self.info = self.dev.getParams() catch |e| return aserr(e);
         self.vm_id = self.dev.vmCreate(self.info) catch |e| return aserr(e);
@@ -78,17 +82,11 @@ pub const Device = struct {
             .device_name = self.info.name, // e.g. "Apple M1 Pro (G13S, T6000)"
             .formats = &supported_formats,
             .hdr = hal.DeviceCaps.deriveHdr(&supported_formats),
-            // AGX takes hand-assembled native ISA, not SPIR-V (this driver ships
-            // no SPIR-V front end).
-            .spirv = false,
-            // Compute is proven live on the M1 (runComputeConstant wrote
-            // 0xCAFEF00D), so advertise it truthfully.
+            // Native G13 graphics accepts the supported scalar SPIR-V subset.
+            .spirv = self.info.gpu_generation == 13,
+            // Compute modules continue to use raw AGX kernels.
             .compute = true,
-            // graphics = the HAL draw path (createPipeline + CommandBuffer.draw).
-            // The AGX triangle draw is a documented hard open-item (it hangs the
-            // GPU command processor). createPipeline/draw are stubbed as NotImplemented.
-            // `graphics` is false: this driver cannot draw geometry.
-            .graphics = false,
+            .graphics = self.info.gpu_generation == 13,
             // Present works via a CPU blit of the cleared framebuffer to the
             // platform surface (proven in the present test, like nvidia).
             .present = true,
@@ -108,8 +106,24 @@ pub const Device = struct {
         return va;
     }
 
+    fn validateResourceDesc(desc: hal.ResourceDesc) hal.Error!void {
+        switch (desc) {
+            .buffer => |b| {
+                if (b.size == 0 or b.size > std.math.maxInt(u64) - PAGE) return error.InvalidArgument;
+            },
+            .image => |i| {
+                if (i.width == 0 or i.height == 0 or i.width > 16384 or i.height > 16384)
+                    return error.InvalidArgument;
+                if (i.format != .rgba8_unorm and i.format != .bgra8_unorm) return error.Unsupported;
+                if (i.samples != 1 or i.mip_levels != 1 or i.cube or i.depth != 1 or i.array)
+                    return error.Unsupported;
+            },
+        }
+    }
+
     fn createResource(ptr: *anyopaque, desc: hal.ResourceDesc) hal.Error!*hal.Resource {
         const self: *Device = @ptrCast(@alignCast(ptr));
+        try validateResourceDesc(desc);
         const size: u64 = switch (desc) {
             .buffer => |b| b.size,
             // A linear RGBA8 image is width*4 per row (the clear/PBE path is
@@ -120,7 +134,9 @@ pub const Device = struct {
         // VM_BIND wants a 16-KiB-aligned range. Round the BO up to a page.
         const alloc: u64 = std.mem.alignForward(u64, size, PAGE);
         const va = self.reserveVa(alloc);
+        errdefer self.next_va = va;
         const bo = self.dev.allocBo(self.vm_id, alloc, va) catch |e| return aserr(e);
+        errdefer self.dev.freeBo(self.vm_id, bo);
 
         const r = self.gpa.create(Resource) catch return error.OutOfMemory;
         r.* = switch (desc) {
@@ -151,6 +167,7 @@ pub const Device = struct {
     fn mapResource(ptr: *anyopaque, resource: *hal.Resource) hal.Error![]u8 {
         _ = ptr;
         const r: *Resource = @ptrCast(@alignCast(resource));
+        asahi.cleanInvalidateToPoC(r.bo.cpu);
         // allocBo already CPU-mapped the BO (held for the resource's life, like
         // the nvidia driver). Expose the logical size.
         const want: usize = switch (r.desc) {
@@ -174,12 +191,9 @@ pub const Device = struct {
 
     // Compute: createShaderModule(.compute) wraps hand-assembled AGX kernel bytes.
     // dispatchCompute runs the proven asahi compute path on the real GPU.
-    // The graphics draw path (VS+FS pipeline) is stubbed as NotImplemented.
-    // The AGX triangle draw hangs the GPU command processor (a documented hard open-item).
     fn createShaderModule(ptr: *anyopaque, desc: hal.ShaderModuleDesc) hal.Error!*hal.ShaderModule {
         const self: *Device = @ptrCast(@alignCast(ptr));
-        // .compute -> wrap the AGX bytecode. .vertex/.fragment -> NotImplemented
-        // (handled inside ShaderModule.create: no AGX graphics-shader compiler).
+        // Graphics retains SPIR-V for pipeline compilation; compute retains AGX ISA.
         const m = try ShaderModule.create(self.gpa, desc);
         return @ptrCast(m);
     }
@@ -244,13 +258,13 @@ pub const Device = struct {
     }
 
     fn createPipeline(ptr: *anyopaque, desc: hal.PipelineDesc) hal.Error!*hal.Pipeline {
-        _ = ptr;
-        _ = desc;
-        return error.NotImplemented;
+        const self: *Device = @ptrCast(@alignCast(ptr));
+        if (self.info.gpu_generation != 13) return error.Unsupported;
+        return @ptrCast(try @import("pipeline.zig").Pipeline.create(self.gpa, desc));
     }
     fn destroyPipeline(ptr: *anyopaque, pipeline: *hal.Pipeline) void {
-        _ = ptr;
-        _ = pipeline;
+        const self: *Device = @ptrCast(@alignCast(ptr));
+        self.gpa.destroy(@as(*@import("pipeline.zig").Pipeline, @ptrCast(@alignCast(pipeline))));
     }
 
     fn createSurface(ptr: *anyopaque, platform_surface: *anyopaque) hal.Error!*hal.Surface {
@@ -295,6 +309,8 @@ pub const Device = struct {
 test {
     _ = @import("context.zig");
     _ = @import("shader.zig");
+    _ = @import("pipeline.zig");
+    _ = @import("e2e_test.zig");
 }
 
 test "apple Device vtable is complete (every method bound, no null)" {
@@ -342,6 +358,25 @@ test "apple bump-VA allocator: 16-KiB-aligned, monotonic, non-colliding, above r
     }
     // strictly increasing across the whole sequence.
     try std.testing.expect(d.next_va > RESOURCE_VA_BASE);
+}
+
+test "apple resource descriptors reject unsupported layouts before allocation" {
+    try std.testing.expectError(error.InvalidArgument, Device.validateResourceDesc(.{ .buffer = .{ .size = 0 } }));
+    try std.testing.expectError(error.InvalidArgument, Device.validateResourceDesc(.{ .image = .{ .width = 0, .height = 64, .format = .rgba8_unorm } }));
+    try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .depth32_float } }));
+    try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .rgba8_unorm, .samples = 4 } }));
+    try std.testing.expectError(error.Unsupported, Device.validateResourceDesc(.{ .image = .{ .width = 64, .height = 64, .format = .rgba8_unorm, .mip_levels = 2 } }));
+}
+
+test "apple GPU triangle probe from the extracted library" {
+    const driver = @import("../apple.zig").driver;
+    if (!driver.isAvailable(std.testing.io)) return error.SkipZigTest;
+    const dev = try Device.create(std.testing.allocator, std.testing.io);
+    defer dev.deinit();
+    if (!dev.caps().graphics) return error.SkipZigTest;
+    const self: *Device = @ptrCast(@alignCast(dev.ptr));
+    const pixel = try asahi.runTriangle(&self.dev, self.vm_id, self.queue_id);
+    try std.testing.expectEqual(asahi.kTriColor, pixel);
 }
 
 test "apple destroyResource rolls back the bump pointer for the most-recent VA" {

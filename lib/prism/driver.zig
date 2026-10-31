@@ -16,19 +16,20 @@ pub const Driver = struct {
     drm_driver: ?[]const u8 = null,
 
     pub const VTable = struct {
-        isAvailable: *const fn (ptr: *anyopaque) bool,
+        isAvailable: *const fn (ptr: *anyopaque, io: std.Io) bool,
         createDevice: *const fn (ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) Error!Device,
     };
 
-    pub fn isAvailable(self: Driver) bool {
-        return self.vtable.isAvailable(self.ptr);
+    pub fn isAvailable(self: Driver, io: std.Io) bool {
+        return self.vtable.isAvailable(self.ptr, io);
     }
     pub fn createDevice(self: Driver, gpa: std.mem.Allocator, io: std.Io) Error!Device {
         return self.vtable.createDevice(self.ptr, gpa, io);
     }
 };
 
-fn testAvailable(ptr: *anyopaque) bool {
+fn testAvailable(ptr: *anyopaque, io: std.Io) bool {
+    _ = io;
     _ = ptr;
     return true;
 }
@@ -44,6 +45,6 @@ test "driver vtable dispatches name, availability, createDevice" {
     const vt = Driver.VTable{ .isAvailable = &testAvailable, .createDevice = &testCreateDevice };
     const d = Driver{ .name = "test", .ptr = &dummy, .vtable = &vt };
     try std.testing.expectEqualStrings("test", d.name);
-    try std.testing.expect(d.isAvailable());
+    try std.testing.expect(d.isAvailable(std.testing.io));
     try std.testing.expectError(error.NotImplemented, d.createDevice(std.testing.allocator, std.testing.io));
 }

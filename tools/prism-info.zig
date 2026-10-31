@@ -19,7 +19,7 @@ fn linuxMain(init: std.process.Init) !void {
 
     try out.print("Drivers ({d} compiled in):\n", .{prism.drivers.all.len});
     for (prism.drivers.all) |d| {
-        const available = d.isAvailable();
+        const available = d.isAvailable(io);
         try out.print("  {s}\n", .{d.name});
         try out.print("    available:    {s}\n", .{if (available) "yes" else "no"});
         if (available) {

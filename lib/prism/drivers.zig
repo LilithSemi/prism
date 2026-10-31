@@ -31,7 +31,7 @@ fn buildAll() []const Driver {
     const vg_list: []const Driver = if (build_options.driver_virgl and on_linux) &[_]Driver{@import("drivers/virgl.zig").driver} else &.{};
     // Auto-selection preference order: real hardware drivers first, the software
     // rasterizer last as the universal fallback.
-    return vk_list ++ ap_list ++ nv_list ++ vg_list ++ sw_list;
+    return ap_list ++ nv_list ++ vg_list ++ vk_list ++ sw_list;
 }
 
 pub const all: []const Driver = buildAll();
@@ -40,12 +40,12 @@ pub const all: []const Driver = buildAll();
 /// order) when name is null. Availability is a cheap predicate. A driver can
 /// report available yet have an unimplemented createDevice. Use createBestDevice
 /// when you want one that is actually usable.
-pub fn select(name: ?[]const u8) ?Driver {
+pub fn select(name: ?[]const u8, io: std.Io) ?Driver {
     if (name) |want| {
         for (all) |d| if (std.mem.eql(u8, d.name, want)) return d;
         return null;
     }
-    for (all) |d| if (d.isAvailable()) return d;
+    for (all) |d| if (d.isAvailable(io)) return d;
     return null;
 }
 
@@ -64,7 +64,7 @@ pub const Selected = struct { driver: Driver, device: driver.Device };
 /// draw here, not even the software fallback.
 pub fn createBestDevice(gpa: std.mem.Allocator, io: std.Io) ?Selected {
     for (all) |d| {
-        if (!d.isAvailable()) continue;
+        if (!d.isAvailable(io)) continue;
         const dev = d.createDevice(gpa, io) catch continue;
         if (!canDraw(gpa, dev)) {
             dev.deinit();
@@ -77,12 +77,9 @@ pub fn createBestDevice(gpa: std.mem.Allocator, io: std.Io) ?Selected {
 
 /// Whether `dev` can put geometry on a render target, rather than merely start.
 ///
-/// Starting says almost nothing. The apple driver starts on any Asahi machine
-/// because it is compute-capable, and then rejects every vertex and fragment
-/// module at `createShaderModule` (see `drivers/apple/shader.zig`, where the
-/// graphics path is a documented open item). A caller that took the first
-/// driver to start got that one, never reached the software rasterizer behind
-/// it, and failed at the first pipeline it built.
+/// Driver initialization alone does not establish support for the shader and
+/// pipeline needed by a graphics consumer. Native drivers may support only a
+/// subset of shader operations or hardware generations.
 ///
 /// So this asks the only question that separates them: draw one triangle over a
 /// contrasting background and read the middle pixel back. An error anywhere
@@ -179,9 +176,9 @@ pub fn selectForDrmDevice(dev: u64) ?Driver {
 
 test "drivers list and selection" {
     try std.testing.expect(all.len >= 1);
-    try std.testing.expect(select(all[0].name) != null);
-    try std.testing.expect(select("does-not-exist") == null);
-    try std.testing.expect(select(null) != null);
+    try std.testing.expect(select(all[0].name, std.testing.io) != null);
+    try std.testing.expect(select("does-not-exist", std.testing.io) == null);
+    try std.testing.expect(select(null, std.testing.io) != null);
 }
 
 test "createBestDevice brings up a usable device (hardware if present, else software)" {
@@ -218,7 +215,7 @@ test "the software rasterizer draws, so it is a real fallback" {
     // It is the universal last resort, the only driver on a machine with no GPU
     // and the one in a build sandbox. A fallback that cannot draw is not one.
     const gpa = std.testing.allocator;
-    const d = select("software") orelse return error.SkipZigTest;
+    const d = select("software", std.testing.io) orelse return error.SkipZigTest;
     const dev = d.createDevice(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();
     try std.testing.expect(canDraw(gpa, dev));

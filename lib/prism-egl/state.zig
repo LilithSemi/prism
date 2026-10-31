@@ -123,10 +123,15 @@ pub const Display = struct {
     /// the software driver, the same HAL path the Vulkan ICD's software renderer
     /// and the clear/present example use.
     device: ?prism.hal.Device = null,
+    io_runtime: ?*std.Io.Threaded = null,
 
     pub fn deinit(self: *Display) void {
         if (self.device) |dev| dev.deinit();
         if (self.backend) |b| b.deinit();
+        if (self.io_runtime) |runtime| {
+            runtime.deinit();
+            gpa.destroy(runtime);
+        }
         self.* = undefined;
     }
 
@@ -1071,6 +1076,13 @@ pub fn lookupDisplay(handle: egl.EGLDisplay) ?*Display {
 /// platform display (headless for surfaceless / no-display M1). Idempotent.
 pub fn initialize(d: *Display) prism.Error!void {
     if (d.initialized) return;
+    const runtime = gpa.create(std.Io.Threaded) catch return error.OutOfMemory;
+    runtime.* = .init(gpa, .{});
+    errdefer {
+        runtime.deinit();
+        gpa.destroy(runtime);
+    }
+    const io = runtime.io();
     // Enumeration is display-free: back it with the headless platform display (no
     // Wayland connection needed to enumerate configs or to allocate offscreen
     // pbuffers). A window surface supplies its own platform.Surface via the EGL
@@ -1088,12 +1100,13 @@ pub fn initialize(d: *Display) prism.Error!void {
     if (std.c.getenv("PRISM_FORCE_SW") != null) pinned_driver = "software"; // DIAG: force CPU driver
     if (std.c.getenv("PRISM_NOQUAD") != null) prism.drivers.software.pipeline.disable_quad_diag = true; // DIAG: scalar FS only
     if (pinned_driver) |name| {
-        const drv = prism.drivers.select(name) orelse return error.InitializationFailed;
-        d.device = try drv.createDevice(gpa, prism.hal.defaultIo());
+        const drv = prism.drivers.select(name, io) orelse return error.InitializationFailed;
+        d.device = try drv.createDevice(gpa, io);
     } else {
-        const sel = prism.drivers.createBestDevice(gpa, prism.hal.defaultIo()) orelse return error.InitializationFailed;
+        const sel = prism.drivers.createBestDevice(gpa, io) orelse return error.InitializationFailed;
         d.device = sel.device;
     }
+    d.io_runtime = runtime;
     d.initialized = true;
 }
 
@@ -1106,6 +1119,11 @@ pub fn terminate(d: *Display) void {
     if (d.backend) |b| {
         b.deinit();
         d.backend = null;
+    }
+    if (d.io_runtime) |runtime| {
+        runtime.deinit();
+        gpa.destroy(runtime);
+        d.io_runtime = null;
     }
     d.initialized = false;
 }

@@ -212,7 +212,8 @@ fn mockCreateDevice(ptr: *anyopaque, gpa: std.mem.Allocator, io: std.Io) drv.Err
     dev.* = .{ .gpa = gpa };
     return .{ .ptr = dev, .vtable = &MockDevice.vtable };
 }
-fn mockAvailable(ptr: *anyopaque) bool {
+fn mockAvailable(ptr: *anyopaque, io: std.Io) bool {
+    _ = io;
     _ = ptr;
     return true;
 }

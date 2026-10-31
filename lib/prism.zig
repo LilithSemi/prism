@@ -83,6 +83,8 @@ test "version is non-empty" {
 // test-only files are referenced explicitly here.
 test {
     _ = drivers;
+    if (build_options.driver_apple and builtin.os.tag == .linux and builtin.cpu.arch == .aarch64)
+        _ = @import("prism/drivers/apple.zig");
     _ = platform;
     _ = spirv;
     _ = glsl;

@@ -95,8 +95,8 @@ const Renderer = struct {
 };
 
 /// Build the full triangle render state on one driver's device from the shared
-/// SPIR-V. A driver that cannot build a graphics pipeline (the apple driver stubs
-/// the shader path) errors out so the caller moves to the next driver. The
+/// SPIR-V. A driver that cannot build this graphics pipeline errors out so the
+/// caller moves to the next driver. The
 /// errdefer chain frees whatever was created. The software driver always
 /// succeeds, so it is the guaranteed fallback.
 fn buildRenderer(
@@ -190,11 +190,9 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(fs_spirv);
 
     // Prefer a real GPU, fall back to the software rasterizer. Probe each compiled
-    // driver in preference order by building the pipeline on it. The apple driver
-    // creates a device but stubs the draw path, so on an M-series machine this
-    // lands on software.
+    // driver in preference order by building the pipeline on it.
     const renderer = for (prism.drivers.all) |d| {
-        if (!d.isAvailable()) continue;
+        if (!d.isAvailable(init.io)) continue;
         if (buildRenderer(d, gpa, init.io, cvs.spirv, cvs.attributes, fs_spirv)) |r| break r else |_| {}
     } else return error.InitializationFailed;
     defer renderer.deinit();
