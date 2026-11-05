@@ -7,16 +7,16 @@ fn supportsVulkan(target: std.Target) bool {
     };
 }
 
-pub fn defaultDrivers(target: std.Target) []const u8 {
-    if (target.abi.isAndroid()) return "vulkan";
-    if (target.os.tag == .linux) return "software,apple,mali,nvidia,virgl";
-    return "software";
+pub fn defaultDrivers(target: std.Target) []const []const u8 {
+    if (target.abi.isAndroid()) return &.{"vulkan"};
+    if (target.os.tag == .linux) return &.{ "software", "apple", "mali", "nvidia", "virgl" };
+    return &.{"software"};
 }
 
-pub fn defaultDisplayBackends(target: std.Target) []const u8 {
-    if (target.os.tag == .freestanding) return "headless,virtio_gpu";
-    if (target.os.tag == .linux and !target.abi.isAndroid()) return "headless,drm,gbm,wayland,x11";
-    return "headless";
+pub fn defaultDisplayBackends(target: std.Target) []const []const u8 {
+    if (target.os.tag == .freestanding) return &.{ "headless", "virtio_gpu" };
+    if (target.os.tag == .linux and !target.abi.isAndroid()) return &.{ "headless", "drm", "gbm", "wayland", "x11" };
+    return &.{"headless"};
 }
 
 pub fn build(b: *std.Build) void {
@@ -36,20 +36,17 @@ pub fn build(b: *std.Build) void {
         "virgl",
         "vulkan",
     };
-    const drivers_opt = b.option([]const u8, "drivers", "Comma-separated drivers to compile in") orelse defaultDrivers(target.result);
+    const drivers_opt = b.option([]const []const u8, "drivers", "Driver to compile in; repeat to select multiple drivers") orelse defaultDrivers(target.result);
     var enabled = std.StringHashMap(void).init(b.allocator);
-    {
-        var it = std.mem.splitScalar(u8, drivers_opt, ',');
-        while (it.next()) |raw| {
-            const name = std.mem.trim(u8, raw, " ");
-            if (name.len == 0) continue;
-            var ok = false;
-            for (known_drivers) |k| {
-                if (std.mem.eql(u8, k, name)) ok = true;
-            }
-            if (!ok) std.debug.panic("unknown driver: {s}", .{name});
-            enabled.put(name, {}) catch @panic("OOM");
+    for (drivers_opt) |raw| {
+        const name = std.mem.trim(u8, raw, " ");
+        if (name.len == 0) continue;
+        var ok = false;
+        for (known_drivers) |k| {
+            if (std.mem.eql(u8, k, name)) ok = true;
         }
+        if (!ok) std.debug.panic("unknown driver: {s}", .{name});
+        enabled.put(name, {}) catch @panic("OOM");
     }
 
     // -Ddisplay-backends controls the presentation integrations. Keep this
@@ -57,23 +54,20 @@ pub fn build(b: *std.Build) void {
     // drivers, but should not fetch or execute Wayland/X11 protocol tooling.
     const known_display_backends = [_][]const u8{ "headless", "drm", "gbm", "wayland", "x11", "virtio_gpu" };
     const display_backends_opt = b.option(
-        []const u8,
+        []const []const u8,
         "display-backends",
-        "Comma-separated display backends to compile in (headless,drm,gbm,wayland,x11,virtio_gpu)",
+        "Display backend to compile in; repeat to select multiple backends",
     ) orelse defaultDisplayBackends(target.result);
     var display_backends = std.StringHashMap(void).init(b.allocator);
-    {
-        var it = std.mem.splitScalar(u8, display_backends_opt, ',');
-        while (it.next()) |raw| {
-            const name = std.mem.trim(u8, raw, " ");
-            if (name.len == 0) continue;
-            var ok = false;
-            for (known_display_backends) |known| {
-                if (std.mem.eql(u8, known, name)) ok = true;
-            }
-            if (!ok) std.debug.panic("unknown display backend: {s}", .{name});
-            display_backends.put(name, {}) catch @panic("OOM");
+    for (display_backends_opt) |raw| {
+        const name = std.mem.trim(u8, raw, " ");
+        if (name.len == 0) continue;
+        var ok = false;
+        for (known_display_backends) |known| {
+            if (std.mem.eql(u8, known, name)) ok = true;
         }
+        if (!ok) std.debug.panic("unknown display backend: {s}", .{name});
+        display_backends.put(name, {}) catch @panic("OOM");
     }
     const linux_host = target.result.os.tag == .linux and !target.result.abi.isAndroid();
     if (!linux_host and (display_backends.contains("drm") or display_backends.contains("gbm") or

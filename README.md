@@ -23,11 +23,12 @@ currently use Wayland. Install glmark2 with its Wayland/GLES2 variant, `mesa-dem
 `vulkan-tools` (for `vulkaninfo` and `vkcube`). The Nix development shell
 (`nix develop`) includes glmark2, Mesa demos, and Vulkan tools.
 
-Display backends are selected at build time with
-`-Ddisplay-backends=headless,drm,gbm,wayland,x11`. Linux enables those five by
-default; freestanding targets default to `headless,virtio_gpu`. Pass an empty
-value or any comma-separated subset for a smaller build. Disabled X11 and
-Wayland backends do not fetch or run their protocol generators.
+Display backends are selected by repeating `-Ddisplay-backends`, for example
+`-Ddisplay-backends=headless -Ddisplay-backends=x11`. Linux enables headless,
+DRM, GBM, Wayland, and X11 by default; freestanding targets default to headless
+and virtio-gpu. Pass an empty value or repeat the option with any desired
+backends for a smaller build. Disabled X11 and Wayland backends do not fetch or
+run their protocol generators. Drivers use the same repeated-option form.
 
 From the repository root, build the libraries and their loader manifests:
 
