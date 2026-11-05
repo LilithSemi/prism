@@ -17,8 +17,9 @@ Userspace graphics stack
 
 ## Running glmark2 and demos
 
-On Linux, use a running Wayland session and the system EGL/GLES and Vulkan
-loaders. Install glmark2 with its Wayland/GLES2 variant, `mesa-demos`, and
+On Linux, the native Prism example can present through either Wayland or X11
+(Wayland is preferred when both are available). The EGL/GLES and Vulkan frontends
+currently use Wayland. Install glmark2 with its Wayland/GLES2 variant, `mesa-demos`, and
 `vulkan-tools` (for `vulkaninfo` and `vkcube`). The Nix development shell
 (`nix develop`) includes glmark2, Mesa demos, and Vulkan tools.
 

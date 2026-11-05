@@ -95,6 +95,20 @@ fn printPlatforms(out: anytype, init: std.process.Init) !void {
         try out.print("  wayland      available: no   (WAYLAND_DISPLAY / XDG_RUNTIME_DIR unset)\n", .{});
     }
 
+    // x11: DISPLAY alone is not enough (it may name a stale socket), so make a
+    // real authenticated connection and validate the root visual used by the
+    // PutImage backend.
+    if (prism.platform.x11.resolveDisplay(init.environ_map)) |display_name| {
+        if (prism.platform.x11.create(gpa, io, display_name, init.environ_map)) |display| {
+            display.deinit();
+            try out.print("  x11          available: yes  (display: {s})\n", .{display_name});
+        } else |_| {
+            try out.print("  x11          available: no   (cannot connect to {s} or unsupported root visual)\n", .{display_name});
+        }
+    } else |_| {
+        try out.print("  x11          available: no   (DISPLAY unset)\n", .{});
+    }
+
     // drm: read-only scan of /dev/dri/card* (no SET_MASTER, no modeset).
     try printDrm(out);
 

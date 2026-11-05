@@ -10,11 +10,12 @@ pub const Display = @import("platform/surface.zig").Display;
 // on any target, freestanding included.
 pub const headless = @import("platform/headless.zig");
 
-// Wayland and DRM backends use std.os.linux / std.posix / the wayland
-// subproject module, none of which exist on freestanding targets. Both are
+// Window-system and DRM backends use host networking/syscalls and their
+// protocol subproject modules, none of which exist on freestanding targets. They are
 // gated behind a comptime os check so a freestanding build never analyzes them.
 pub const drm = if (builtin.target.os.tag == .linux) @import("platform/drm.zig") else struct {};
 pub const wayland = if (builtin.target.os.tag == .linux) @import("platform/wayland.zig") else struct {};
+pub const x11 = if (builtin.target.os.tag == .linux) @import("platform/x11.zig") else struct {};
 
 // GBM present backend: adapts the gbm package's Surface to a platform.Surface for
 // the EGL GBM platform. The gbm package is portable, but the EGL frontend that

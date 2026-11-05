@@ -1,6 +1,6 @@
 //! triangle: draws a colored triangle on the best available driver (real GPU
-//! first, software last) and presents it to a Wayland compositor, a KMS/DRM
-//! console, or a headless framebuffer. Run: zig build run-triangle.
+//! first, software last) and presents it to a Wayland compositor, an X11
+//! server, a KMS/DRM console, or a headless framebuffer. Run: zig build run-triangle.
 
 const std = @import("std");
 const prism = @import("prism");
@@ -149,20 +149,26 @@ fn buildRenderer(
 }
 
 /// A display backend plus whether it has a windowing event source. Only the
-/// Wayland backend delivers resize/close events, so the others render one frame.
+/// Window-system backends deliver resize/close events; direct-display and
+/// headless backends render one frame.
 const Selected = struct {
     display: platform.Display,
     interactive: bool,
     name: []const u8,
 };
 
-/// Open the best available display: a Wayland compositor if one is reachable,
-/// else a KMS/DRM console, else an offscreen headless framebuffer that always
-/// works. The render path is identical across all three.
+/// Open the best available display: Wayland, then X11, then KMS/DRM, then the
+/// offscreen headless framebuffer that always works. The render path is shared.
 fn openDisplay(gpa: std.mem.Allocator, io: std.Io, env: anytype, path_buf: []u8) !Selected {
     if (platform.wayland.resolveSocketPath(env, path_buf)) |socket_path| {
         if (platform.wayland.create(gpa, io, socket_path)) |display| {
             return .{ .display = display, .interactive = true, .name = "wayland" };
+        } else |_| {}
+    } else |_| {}
+
+    if (platform.x11.resolveDisplay(env)) |display_name| {
+        if (platform.x11.create(gpa, io, display_name, env)) |display| {
+            return .{ .display = display, .interactive = true, .name = "x11" };
         } else |_| {}
     } else |_| {}
 
@@ -208,7 +214,7 @@ pub fn main(init: std.process.Init) !void {
     if (!sel.interactive) return;
 
     // Render until the user closes the window. processEvents blocks on the next
-    // compositor event. On resize we re-render at the new size.
+    // window-system event. On resize we re-render at the new size.
     while (true) {
         switch (plat_surface.processEvents() catch break) {
             .none => {},

@@ -53,6 +53,21 @@ pub fn build(b: *std.Build) void {
     }
 
     const wl_dep = b.dependency("wayland", .{ .target = target, .optimize = optimize });
+    const x11_dep = b.dependency("x11", .{ .target = target, .optimize = optimize });
+    const xcbproto_dep = b.dependency("xcbproto", .{});
+
+    // Generate the core X11 protocol bindings from xcbproto. x11.zig keeps the
+    // transport and wire codec hand-written while generating the large request/
+    // event surface from the canonical protocol XML.
+    const xproto_gen = b.addRunArtifact(x11_dep.artifact("x11-gen-host"));
+    xproto_gen.addFileArg(xcbproto_dep.path("src/xproto.xml"));
+    const xproto = b.createModule(.{
+        .root_source_file = xproto_gen.addOutputFileArg("xproto.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    xproto.addImport("x11", x11_dep.module("x11"));
+
     const nvidia_dep = b.dependency("nvidia", .{ .target = target, .optimize = optimize });
     const asahi_dep = b.dependency("asahi", .{ .target = target, .optimize = optimize });
     const mali_dep = b.dependency("mali", .{ .target = target, .optimize = optimize });
@@ -75,6 +90,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "build-options", .module = options.createModule() },
             .{ .name = "wayland", .module = wl_dep.module("wayland") },
+            .{ .name = "x11", .module = x11_dep.module("x11") },
+            .{ .name = "xproto", .module = xproto },
             .{ .name = "nvidia", .module = nvidia_dep.module("nvidia") },
             .{ .name = "asahi", .module = asahi_dep.module("asahi") },
             .{ .name = "mali", .module = mali_dep.module("mali") },
@@ -177,7 +194,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Triangle example: best available driver with a software fallback, presented
-    // over Wayland. Wayland presentation is Linux-only, so the example is too.
+    // through Wayland/X11. The window-system backends are Linux-only.
     if (target.result.os.tag == .linux and !target.result.abi.isAndroid()) {
         const triangle_mod = b.createModule(.{
             .root_source_file = b.path("examples/triangle.zig"),
@@ -187,7 +204,7 @@ pub fn build(b: *std.Build) void {
         });
         const triangle_exe = b.addExecutable(.{ .name = "triangle", .root_module = triangle_mod });
         b.installArtifact(triangle_exe);
-        b.step("run-triangle", "Run the triangle on Wayland (needs a compositor)").dependOn(&b.addRunArtifact(triangle_exe).step);
+        b.step("run-triangle", "Run the triangle on Wayland or X11").dependOn(&b.addRunArtifact(triangle_exe).step);
     }
 
     // Render the loader/vendor JSON templates, replacing @LIBDIR@ with the install lib dir.

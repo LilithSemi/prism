@@ -70,6 +70,7 @@
                 ++ lib.optionals (stdenv.hostPlatform.isLinux) [
                   pkg-config
                   wayland
+                  xorg-server
                   glmark2
                   mesa-demos
                 ]
@@ -91,7 +92,7 @@
 
             zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
-              hash = "sha256-S1dwbto0E79cS8vbklCn/gh02LnwV5KqdM+ehT3fBBo=";
+              hash = "sha256-av70Ur/W9AsgrWpvFn0uh0O5Wh5Sv2Hi2zbzzRyKrHs=";
             };
 
             nativeBuildInputs =

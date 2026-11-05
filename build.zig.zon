@@ -12,6 +12,14 @@
             .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#372fc60aaf2c4e8b833a307c8993a61687a7b870",
             .hash = "wayland-0.1.0-J5KKzzOhBgD0IcX3ZyRDIqNS5wedY6WKyXP0tyDtIM4L",
         },
+        .x11 = .{
+            .url = "git+https://git.lilithsemi.com/LilithSemi/x11.zig#8b6554333962f66634b488f2d65acf4b3147ad62",
+            .hash = "x11-0.1.0-dfzXOzYCEgDApwVIit0r8x8oUdvi3kpBt86gYwNBm-9S",
+        },
+        .xcbproto = .{
+            .url = "https://gitlab.com/freedesktop-sdk/mirrors/freedesktop/xorg/proto/xcbproto/-/archive/xcb-proto-1.17.0/xcbproto-xcb-proto-1.17.0.tar.gz",
+            .hash = "N-V-__8AAFnMDACdXT5YIakLgEMFZ-K7ZICgB18p8xKobHjk",
+        },
         .asahi = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/asahi.zig#54872fd99187b2febc32ae9f93ee78b6ea972ca8",
             .hash = "asahi-0.1.0-pewgrkU9BQDAWLlCdh3xp616UHNuyq5b7u6ykk66YGCo",
