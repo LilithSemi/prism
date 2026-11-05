@@ -406,7 +406,7 @@ pub fn eglCreateWindowSurface(
     //    native window is the app's gbm.Surface. Render into its back buffer; the
     //    app scans out the front buffer via gbm_surface_lock_front_buffer.
     if (d.gbmDevice() != null) {
-        const gbm_surface: *prism.platform.gbm.Surface = @ptrCast(@alignCast(native));
+        const gbm_surface: *state.GbmSurface = @ptrCast(@alignCast(native));
         const s = state.createGbmWindowSurface(d, idx, gbm_surface) catch |e| {
             setError(if (e == error.InvalidArgument) egl.EGL_BAD_NATIVE_WINDOW else eglErrorFor(e));
             return egl.EGL_NO_SURFACE;

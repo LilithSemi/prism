@@ -320,13 +320,14 @@ test "apple submit with neither RT nor clear is InvalidArgument (no GPU touched)
 }
 
 test "apple GPU clears multiple targets in order and presents both channel orders" {
+    const platform = @import("../../platform.zig");
+    if (!platform.headless_enabled) return error.SkipZigTest;
     const driver = @import("../apple.zig").driver;
     if (!driver.isAvailable(std.testing.io)) return error.SkipZigTest;
     const dev = try driver.createDevice(std.testing.allocator, std.testing.io);
     defer dev.deinit();
     const ctx = try dev.createContext();
     defer ctx.deinit();
-    const platform = @import("../../platform.zig");
     const display = try platform.headless.create(std.testing.allocator);
     defer display.deinit();
 

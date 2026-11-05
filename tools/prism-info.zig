@@ -74,47 +74,65 @@ fn printPlatforms(out: anytype, init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
 
-    // headless: a pure allocator-backed framebuffer, always available.
-    try out.print("  headless     available: yes\n", .{});
+    // headless: a pure allocator-backed framebuffer, available on every target
+    // when selected.
+    try out.print("  headless     {s}\n", .{if (prism.platform.headless_enabled) "available: yes" else "disabled at build time"});
 
     // wayland: probe the socket, and when reachable ask the compositor which DRM
     // device it prefers + resolve that to a kernel driver name.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (prism.platform.wayland.resolveSocketPath(init.environ_map, &path_buf)) |sock| {
-        if (prism.platform.wayland.preferredDevice(gpa, io, sock)) |dev| {
-            var name_buf: [64]u8 = undefined;
-            if (prism.platform.drm.driverForDev(dev, &name_buf)) |kdriver| {
-                try out.print("  wayland      available: yes  (socket: {s}; compositor prefers driver '{s}')\n", .{ sock, kdriver });
+    if (prism.platform.wayland_enabled) {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (prism.platform.wayland.resolveSocketPath(init.environ_map, &path_buf)) |sock| {
+            if (prism.platform.drm_enabled) {
+                if (prism.platform.wayland.preferredDevice(gpa, io, sock)) |dev| {
+                    var name_buf: [64]u8 = undefined;
+                    if (prism.platform.drm.driverForDev(dev, &name_buf)) |kdriver| {
+                        try out.print("  wayland      available: yes  (socket: {s}; compositor prefers driver '{s}')\n", .{ sock, kdriver });
+                    } else {
+                        try out.print("  wayland      available: yes  (socket: {s}; compositor prefers an unrecognized device)\n", .{sock});
+                    }
+                } else {
+                    try out.print("  wayland      available: yes  (socket: {s})\n", .{sock});
+                }
             } else {
-                try out.print("  wayland      available: yes  (socket: {s}; compositor prefers an unrecognized device)\n", .{sock});
+                try out.print("  wayland      available: yes  (socket: {s})\n", .{sock});
             }
-        } else {
-            try out.print("  wayland      available: yes  (socket: {s})\n", .{sock});
+        } else |_| {
+            try out.print("  wayland      available: no   (WAYLAND_DISPLAY / XDG_RUNTIME_DIR unset)\n", .{});
         }
-    } else |_| {
-        try out.print("  wayland      available: no   (WAYLAND_DISPLAY / XDG_RUNTIME_DIR unset)\n", .{});
+    } else {
+        try out.print("  wayland      disabled at build time\n", .{});
     }
 
     // x11: DISPLAY alone is not enough (it may name a stale socket), so make a
     // real authenticated connection and validate the root visual used by the
     // PutImage backend.
-    if (prism.platform.x11.resolveDisplay(init.environ_map)) |display_name| {
-        if (prism.platform.x11.create(gpa, io, display_name, init.environ_map)) |display| {
-            display.deinit();
-            try out.print("  x11          available: yes  (display: {s})\n", .{display_name});
+    if (prism.platform.x11_enabled) {
+        if (prism.platform.x11.resolveDisplay(init.environ_map)) |display_name| {
+            if (prism.platform.x11.create(gpa, io, display_name, init.environ_map)) |display| {
+                display.deinit();
+                try out.print("  x11          available: yes  (display: {s})\n", .{display_name});
+            } else |_| {
+                try out.print("  x11          available: no   (cannot connect to {s} or unsupported root visual)\n", .{display_name});
+            }
         } else |_| {
-            try out.print("  x11          available: no   (cannot connect to {s} or unsupported root visual)\n", .{display_name});
+            try out.print("  x11          available: no   (DISPLAY unset)\n", .{});
         }
-    } else |_| {
-        try out.print("  x11          available: no   (DISPLAY unset)\n", .{});
+    } else {
+        try out.print("  x11          disabled at build time\n", .{});
     }
 
     // drm: read-only scan of /dev/dri/card* (no SET_MASTER, no modeset).
-    try printDrm(out);
+    if (prism.platform.drm_enabled)
+        try printDrm(out)
+    else
+        try out.print("  drm          disabled at build time\n", .{});
+
+    try out.print("  gbm          {s}\n", .{if (prism.platform.gbm_enabled) "enabled (application-provided device)" else "disabled at build time"});
 
     // virtio_gpu: the present backend is the freestanding Conduit path only; on a
     // Linux host it is never usable directly.
-    try out.print("  virtio_gpu   available: no   (freestanding/baremetal only)\n", .{});
+    try out.print("  virtio_gpu   {s}\n", .{if (prism.platform.virtio_gpu_enabled) "enabled" else "disabled at build time"});
 }
 
 /// List the DRM primary nodes that exist (/dev/dri/card0..card15), read-only. We

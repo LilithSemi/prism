@@ -6250,6 +6250,7 @@ test {
 }
 
 test "swapchain recreate (resize) is crash-free: create -> recreate(oldSwapchain) -> destroy old, looped" {
+    if (!platform.headless_enabled) return error.SkipZigTest;
     // Regression for the destroySwapchainKHR bad-`sc` segfault hit on a real
     // compositor resize. vkcube on resize creates a new swapchain with the old
     // one set as ci.oldSwapchain, then destroys the old one, looped. This drives

@@ -5,6 +5,7 @@ const shader = sw.shader;
 const platform = @import("../../platform.zig");
 
 test "render triangle and present to headless surface" {
+    if (!platform.headless_enabled) return error.SkipZigTest;
     const gpa = std.testing.allocator;
 
     // Create headless display and surface.

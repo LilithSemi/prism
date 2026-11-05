@@ -194,7 +194,7 @@ pub const CommandBuffer = struct {
             .max_anisotropy = b.max_anisotropy,
             .base_level = b.base_level,
             .max_level = b.max_level,
-            .swizzle = .{ @intFromEnum(b.swizzle[0]), @intFromEnum(b.swizzle[1]), @intFromEnum(b.swizzle[2]), @intFromEnum(b.swizzle[3]) },
+            .swizzle = .{ @backingInt(b.swizzle[0]), @backingInt(b.swizzle[1]), @backingInt(b.swizzle[2]), @backingInt(b.swizzle[3]) },
             .lod_bias = b.lod_bias,
             .min_lod = b.min_lod,
             .max_lod = b.max_lod,
@@ -611,7 +611,7 @@ pub const Context = struct {
             gfx.setTscLodClamp(&tsc, tb.min_lod, tb.max_lod); // GL_TEXTURE_MIN_LOD / MAX_LOD
             // GL_TEXTURE_COMPARE_MODE (sampler2DShadow): the TSC holds the depth-compare enable + func.
             // The isel's texShadow sets the TEX z_cmpr bit so the HW compares dref vs stored depth (R).
-            gfx.setTscDepthCompare(&tsc, tb.compare_enable, @intFromEnum(tb.compare_op));
+            gfx.setTscDepthCompare(&tsc, tb.compare_enable, @backingInt(tb.compare_op));
             gpumem.writeWords(self.tic_pool.bytes[desc_idx * 32 ..][0..32], &tic);
             gpumem.writeWords(self.tsc_pool.bytes[desc_idx * 32 ..][0..32], &tsc);
             const handle: u32 = (desc_idx & 0xfffff) | (desc_idx << 20);
@@ -3309,6 +3309,7 @@ test "nvidia depth is PRESERVED across separate submits within a frame (skips wi
 }
 
 test "nvidia presents a rendered framebuffer to a surface (skips without a GPU)" {
+    if (!platform.headless_enabled) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const dev = NvDevice.create(gpa, std.testing.io) catch return error.SkipZigTest;
     defer dev.deinit();

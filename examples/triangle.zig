@@ -160,23 +160,32 @@ const Selected = struct {
 /// Open the best available display: Wayland, then X11, then KMS/DRM, then the
 /// offscreen headless framebuffer that always works. The render path is shared.
 fn openDisplay(gpa: std.mem.Allocator, io: std.Io, env: anytype, path_buf: []u8) !Selected {
-    if (platform.wayland.resolveSocketPath(env, path_buf)) |socket_path| {
-        if (platform.wayland.create(gpa, io, socket_path)) |display| {
-            return .{ .display = display, .interactive = true, .name = "wayland" };
+    if (platform.wayland_enabled) {
+        if (platform.wayland.resolveSocketPath(env, path_buf)) |socket_path| {
+            if (platform.wayland.create(gpa, io, socket_path)) |display| {
+                return .{ .display = display, .interactive = true, .name = "wayland" };
+            } else |_| {}
         } else |_| {}
-    } else |_| {}
+    }
 
-    if (platform.x11.resolveDisplay(env)) |display_name| {
-        if (platform.x11.create(gpa, io, display_name, env)) |display| {
-            return .{ .display = display, .interactive = true, .name = "x11" };
+    if (platform.x11_enabled) {
+        if (platform.x11.resolveDisplay(env)) |display_name| {
+            if (platform.x11.create(gpa, io, display_name, env)) |display| {
+                return .{ .display = display, .interactive = true, .name = "x11" };
+            } else |_| {}
         } else |_| {}
-    } else |_| {}
+    }
 
-    if (platform.drm.create(gpa)) |display| {
-        return .{ .display = display, .interactive = false, .name = "drm" };
-    } else |_| {}
+    if (platform.drm_enabled) {
+        if (platform.drm.create(gpa)) |display| {
+            return .{ .display = display, .interactive = false, .name = "drm" };
+        } else |_| {}
+    }
 
-    return .{ .display = try platform.headless.create(gpa), .interactive = false, .name = "headless" };
+    if (platform.headless_enabled)
+        return .{ .display = try platform.headless.create(gpa), .interactive = false, .name = "headless" };
+
+    return error.InitializationFailed;
 }
 
 pub fn main(init: std.process.Init) !void {
