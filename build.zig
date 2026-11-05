@@ -9,7 +9,7 @@ fn supportsVulkan(target: std.Target) bool {
 
 pub fn defaultDrivers(target: std.Target) []const u8 {
     if (target.abi.isAndroid()) return "vulkan";
-    if (target.os.tag == .linux) return "software,apple,nvidia,virgl";
+    if (target.os.tag == .linux) return "software,apple,mali,nvidia,virgl";
     return "software";
 }
 
@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
     const known_drivers = [_][]const u8{
         "software",
         "apple",
+        "mali",
         "nvidia",
         "virgl",
         "vulkan",
@@ -54,6 +55,7 @@ pub fn build(b: *std.Build) void {
     const wl_dep = b.dependency("wayland", .{ .target = target, .optimize = optimize });
     const nvidia_dep = b.dependency("nvidia", .{ .target = target, .optimize = optimize });
     const asahi_dep = b.dependency("asahi", .{ .target = target, .optimize = optimize });
+    const mali_dep = b.dependency("mali", .{ .target = target, .optimize = optimize });
     const vulcan_dep = b.dependency("vulcan", .{ .target = target, .optimize = optimize });
     const drm_dep = b.dependency("drm", .{ .target = target, .optimize = optimize });
     const gbm_dep = b.dependency("gbm", .{ .target = target, .optimize = optimize });
@@ -75,6 +77,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "wayland", .module = wl_dep.module("wayland") },
             .{ .name = "nvidia", .module = nvidia_dep.module("nvidia") },
             .{ .name = "asahi", .module = asahi_dep.module("asahi") },
+            .{ .name = "mali", .module = mali_dep.module("mali") },
             .{ .name = "drm", .module = drm_dep.module("drm") },
             .{ .name = "gbm", .module = gbm_dep.module("gbm") },
             .{ .name = "vulcan-ir", .module = vulcan_dep.module("vulcan-ir") },

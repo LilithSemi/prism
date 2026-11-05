@@ -11,6 +11,7 @@ Userspace graphics stack
 ## Drivers
 
 - Apple (Asahi)
+- Arm Mali (Panthor)
 - NVIDIA
 - Software
 

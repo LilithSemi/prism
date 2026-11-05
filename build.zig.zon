@@ -40,6 +40,10 @@
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#73814d006638aa00bd553215b054f0f02e457e22",
             .hash = "N-V-__8AAFOXiQJm2niapwlfcDuQxKKSbS6BJkr-Yud5uZGS",
         },
+        .mali = .{
+            .url = "git+https://git.lilithsemi.com/LilithSemi/mali.zig#235fd1a705ab6ef36b1ba627a737e2a4cf3a95b6",
+            .hash = "mali-0.1.0-t-dIGYnWAgCo8d1jT5Cv-yTrKxRgQVxmzyki8UqTivZN",
+        },
     },
     .paths = .{
         "build.zig",

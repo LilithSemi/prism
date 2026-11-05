@@ -27,11 +27,12 @@ fn buildAll() []const Driver {
         &.{};
     const sw_list: []const Driver = if (build_options.driver_software) &[_]Driver{@import("drivers/software.zig").driver} else &.{};
     const ap_list: []const Driver = if (build_options.driver_apple and on_linux and builtin.cpu.arch == .aarch64) &[_]Driver{@import("drivers/apple.zig").driver} else &.{};
+    const ma_list: []const Driver = if (build_options.driver_mali and on_linux and builtin.cpu.arch == .aarch64) &[_]Driver{@import("drivers/mali.zig").driver} else &.{};
     const nv_list: []const Driver = if (build_options.driver_nvidia and on_linux) &[_]Driver{@import("drivers/nvidia.zig").driver} else &.{};
     const vg_list: []const Driver = if (build_options.driver_virgl and on_linux) &[_]Driver{@import("drivers/virgl.zig").driver} else &.{};
     // Auto-selection preference order: real hardware drivers first, the software
     // rasterizer last as the universal fallback.
-    return ap_list ++ nv_list ++ vg_list ++ vk_list ++ sw_list;
+    return ap_list ++ ma_list ++ nv_list ++ vg_list ++ vk_list ++ sw_list;
 }
 
 pub const all: []const Driver = buildAll();
