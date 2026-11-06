@@ -18,6 +18,14 @@ fn flushMap(dev: prism.hal.Device, s: *state.Surface) prism.Error![]u8 {
 
 const EGLint = egl.EGLint;
 const EGLenum = egl.EGLenum;
+
+/// The canonical RGBA8/depth24/stencil8 config used by the GLX compatibility
+/// frontend. Keeping this accessor here also keeps GLX on this module's single
+/// EGL state instance (including its thread-local current context).
+pub fn defaultConfig() EGLConfig {
+    return state.configHandle(2);
+}
+
 const EGLBoolean = egl.EGLBoolean;
 const EGLDisplay = egl.EGLDisplay;
 const EGLConfig = egl.EGLConfig;
@@ -99,7 +107,9 @@ pub fn eglGetPlatformDisplay(
     attrib_list: ?[*]const egl.EGLAttrib,
 ) callconv(.c) EGLDisplay {
     _ = attrib_list;
-    const d = state.getPlatformDisplay(platform, native_display) orelse {
+    const effective_platform = if (platform == egl.EGL_PLATFORM_NONE) defaultNativePlatform() else platform;
+    if (debugEnabled()) std.debug.print("[prism-egl] eglGetPlatformDisplay platform=0x{x} effective=0x{x} native={?}\n", .{ platform, effective_platform, native_display });
+    const d = state.getPlatformDisplay(effective_platform, native_display) orelse {
         // Not our platform. Return EGL_NO_DISPLAY with no error so libEGL tries
         // the next vendor (per the GLVND getPlatformDisplay contract).
         return egl.EGL_NO_DISPLAY;
@@ -114,16 +124,31 @@ pub fn eglGetPlatformDisplayEXT(
     attrib_list: ?[*]const EGLint,
 ) callconv(.c) EGLDisplay {
     _ = attrib_list; // EXT takes EGLint attribs. Ignored for M1.
-    const d = state.getPlatformDisplay(platform, native_display) orelse return egl.EGL_NO_DISPLAY;
+    const effective_platform = if (platform == egl.EGL_PLATFORM_NONE) defaultNativePlatform() else platform;
+    const d = state.getPlatformDisplay(effective_platform, native_display) orelse return egl.EGL_NO_DISPLAY;
     setError(egl.EGL_SUCCESS);
     return @ptrCast(d);
 }
 
 pub fn eglGetDisplay(native_display: ?*anyopaque) callconv(.c) EGLDisplay {
-    // eglGetDisplay(EGL_DEFAULT_DISPLAY) -> our surfaceless default display.
-    const d = state.getPlatformDisplay(egl.EGL_PLATFORM_NONE, native_display) orelse return egl.EGL_NO_DISPLAY;
+    const platform = defaultNativePlatform();
+    if (debugEnabled()) std.debug.print("[prism-egl] eglGetDisplay platform=0x{x} native={?}\n", .{ platform, native_display });
+    const d = state.getPlatformDisplay(platform, native_display) orelse return egl.EGL_NO_DISPLAY;
     setError(egl.EGL_SUCCESS);
     return @ptrCast(d);
+}
+
+fn defaultNativePlatform() EGLenum {
+    // Match the native example's policy when both window systems were built:
+    // an active Wayland session wins, otherwise use X11, then surfaceless.
+    if (prism.platform.wayland_enabled and std.c.getenv("WAYLAND_DISPLAY") != null)
+        return egl.EGL_PLATFORM_WAYLAND_KHR;
+    if (prism.platform.x11_enabled and std.c.getenv("DISPLAY") != null)
+        return egl.EGL_PLATFORM_X11_KHR;
+    if (prism.platform.headless_enabled) return egl.EGL_PLATFORM_SURFACELESS_MESA;
+    if (prism.platform.wayland_enabled) return egl.EGL_PLATFORM_WAYLAND_KHR;
+    if (prism.platform.x11_enabled) return egl.EGL_PLATFORM_X11_KHR;
+    return egl.EGL_PLATFORM_NONE;
 }
 
 pub fn eglInitialize(dpy: EGLDisplay, major: ?*EGLint, minor: ?*EGLint) callconv(.c) EGLBoolean {
@@ -132,6 +157,7 @@ pub fn eglInitialize(dpy: EGLDisplay, major: ?*EGLint, minor: ?*EGLint) callconv
         return egl.EGL_FALSE;
     };
     state.initialize(d) catch |e| {
+        if (debugEnabled()) std.debug.print("[prism-egl] eglInitialize failed: {s}\n", .{@errorName(e)});
         setError(eglErrorFor(e));
         return egl.EGL_FALSE;
     };
@@ -271,10 +297,15 @@ pub fn eglGetConfigAttrib(
         setError(egl.EGL_BAD_PARAMETER);
         return egl.EGL_FALSE;
     }
-    const v = state.configs[idx].attrib(attribute) orelse {
-        setError(egl.EGL_BAD_ATTRIBUTE);
-        return egl.EGL_FALSE;
-    };
+    const v = if (d.platform == egl.EGL_PLATFORM_X11_KHR and attribute == egl.EGL_NATIVE_VISUAL_ID)
+        @as(EGLint, @intCast(d.x11_visual_id))
+    else if (d.platform == egl.EGL_PLATFORM_X11_KHR and attribute == egl.EGL_NATIVE_VISUAL_TYPE)
+        @as(EGLint, 4) // X11 TrueColor
+    else
+        state.configs[idx].attrib(attribute) orelse {
+            setError(egl.EGL_BAD_ATTRIBUTE);
+            return egl.EGL_FALSE;
+        };
     value.?.* = v;
     setError(egl.EGL_SUCCESS);
     return egl.EGL_TRUE;
@@ -408,6 +439,17 @@ pub fn eglCreateWindowSurface(
     if (d.gbmDevice() != null) {
         const gbm_surface: *state.GbmSurface = @ptrCast(@alignCast(native));
         const s = state.createGbmWindowSurface(d, idx, gbm_surface) catch |e| {
+            setError(if (e == error.InvalidArgument) egl.EGL_BAD_NATIVE_WINDOW else eglErrorFor(e));
+            return egl.EGL_NO_SURFACE;
+        };
+        setError(egl.EGL_SUCCESS);
+        return @ptrCast(s);
+    }
+    // 4. X11-bound: EGLNativeWindowType is an XID passed through the pointer-
+    // sized native-window slot. Prism uses a private x11.zig connection to
+    // present to that application-owned server resource.
+    if (d.platform == egl.EGL_PLATFORM_X11_KHR) {
+        const s = state.createX11WindowSurface(d, idx, native) catch |e| {
             setError(if (e == error.InvalidArgument) egl.EGL_BAD_NATIVE_WINDOW else eglErrorFor(e));
             return egl.EGL_NO_SURFACE;
         };
@@ -1407,7 +1449,7 @@ fn asProc(comptime f: anytype) egl.ProcFn {
 
 /// Name to entry-point table. eglGetProcAddress and the GLVND getProcAddress/
 /// getDispatchAddress imports all resolve through here.
-fn lookupProc(name: []const u8) egl.ProcFn {
+pub fn lookupProc(name: []const u8) egl.ProcFn {
     const map = .{
         .{ "eglGetError", asProc(eglGetError) },
         .{ "eglGetDisplay", asProc(eglGetDisplay) },
@@ -1713,12 +1755,11 @@ fn imp_setDispatchIndex(procName: ?[*:0]const u8, index: c_int) callconv(.c) voi
     _ = index;
 }
 
-/// libglvnd calls this for native displays in eglGetDisplay to determine the
-/// platform. We don't sniff native handles (no false matches, per the contract):
-/// return EGL_NONE so libglvnd falls back to its own detection.
+/// libglvnd calls this for eglGetDisplay. Native display handles are opaque, so
+/// select from the compiled backends and active session environment.
 fn imp_findNativeDisplayPlatform(native_display: ?*anyopaque) callconv(.c) EGLenum {
     _ = native_display;
-    return @intCast(egl.EGL_NONE);
+    return defaultNativePlatform();
 }
 
 /// Fill in the GLVND imports table. Shared by __egl_Main and the tests.
@@ -1799,6 +1840,7 @@ test "enumeration path end to end: getDisplay -> initialize -> query -> configs"
 }
 
 test "eglQueryString on an uninitialized display errors NOT_INITIALIZED" {
+    if (!prism.platform.wayland_enabled) return error.SkipZigTest;
     // A fresh display the test owns (wayland platform, never initialized here).
     const dpy = eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, @ptrFromInt(0xabc), null);
     try std.testing.expect(dpy != null);

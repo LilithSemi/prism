@@ -1259,6 +1259,7 @@ pub const VkSurfaceTransformFlagsKHR = VkFlags;
 pub const VkCompositeAlphaFlagsKHR = VkFlags;
 pub const VkSwapchainCreateFlagsKHR = VkFlags;
 pub const VkWaylandSurfaceCreateFlagsKHR = VkFlags;
+pub const VkXcbSurfaceCreateFlagsKHR = VkFlags;
 
 pub const VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: VkColorSpaceKHR = 0;
 pub const VK_PRESENT_MODE_FIFO_KHR: VkPresentModeKHR = 2;
@@ -1278,6 +1279,14 @@ pub const VkWaylandSurfaceCreateInfoKHR = extern struct {
     flags: VkWaylandSurfaceCreateFlagsKHR,
     display: ?*anyopaque,
     surface: ?*anyopaque,
+};
+
+pub const VkXcbSurfaceCreateInfoKHR = extern struct {
+    sType: VkStructureType,
+    pNext: ?*const anyopaque,
+    flags: VkXcbSurfaceCreateFlagsKHR,
+    connection: ?*anyopaque,
+    window: u32,
 };
 
 pub const VkSurfaceCapabilitiesKHR = extern struct {
@@ -1498,6 +1507,9 @@ comptime {
     std.debug.assert(@sizeOf(VkWaylandSurfaceCreateInfoKHR) == 40);
     std.debug.assert(@offsetOf(VkWaylandSurfaceCreateInfoKHR, "display") == 24);
     std.debug.assert(@offsetOf(VkWaylandSurfaceCreateInfoKHR, "surface") == 32);
+    std.debug.assert(@sizeOf(VkXcbSurfaceCreateInfoKHR) == 40);
+    std.debug.assert(@offsetOf(VkXcbSurfaceCreateInfoKHR, "connection") == 24);
+    std.debug.assert(@offsetOf(VkXcbSurfaceCreateInfoKHR, "window") == 32);
     std.debug.assert(@sizeOf(VkSurfaceCapabilitiesKHR) == 52);
     std.debug.assert(@sizeOf(VkSurfaceFormatKHR) == 8);
     std.debug.assert(@sizeOf(VkSwapchainCreateInfoKHR) == 104);

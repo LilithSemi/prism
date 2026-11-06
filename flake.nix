@@ -58,6 +58,7 @@
         { pkgs, ... }:
         {
           default = pkgs.mkShell {
+            LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.libxcb ];
             packages =
               with pkgs;
               (
@@ -70,6 +71,8 @@
                 ++ lib.optionals (stdenv.hostPlatform.isLinux) [
                   pkg-config
                   wayland
+                  libx11
+                  libxcb
                   xorg-server
                   glmark2
                   mesa-demos
@@ -102,7 +105,12 @@
               ]
               ++ lib.optional (pkgs.stdenv.hostPlatform.isLinux) pkg-config;
 
-            buildInputs = with pkgs; (lib.optional (pkgs.stdenv.hostPlatform.isLinux) wayland);
+            buildInputs =
+              with pkgs;
+              lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                wayland
+                libx11
+              ];
 
             postConfigure = ''
               ln -s ${finalAttrs.zigDeps} "$ZIG_GLOBAL_CACHE_DIR/p"

@@ -6,10 +6,77 @@ const std = @import("std");
 const builtin = @import("builtin");
 const prism = @import("prism");
 const egl = @import("egl.zig");
-const wlw = @import("wl_egl_window.zig");
+pub const wayland_window = if (prism.platform.wayland_enabled) @import("wl_egl_window.zig") else DisabledWaylandEgl;
+const wlw = wayland_window;
+
+/// Type-compatible fallback that keeps non-Wayland builds independent of both
+/// wayland.zig and libwayland-client.
+const DisabledWaylandEgl = struct {
+    pub const wl_display = anyopaque;
+    pub const wl_surface = anyopaque;
+
+    pub const ParsedWindow = struct {
+        surface: *wl_surface,
+        width: u32,
+        height: u32,
+    };
+
+    pub fn parse(raw: *anyopaque) ?ParsedWindow {
+        _ = raw;
+        return null;
+    }
+
+    pub const WaylandPresent = struct {
+        pub const Buffer = struct { pixels: []u8 };
+        buffers: []Buffer,
+
+        pub fn init(
+            alloc: std.mem.Allocator,
+            display: *wl_display,
+            surface: *wl_surface,
+            width: u32,
+            height: u32,
+            count: u32,
+        ) error{Unsupported}!*WaylandPresent {
+            _ = alloc;
+            _ = display;
+            _ = surface;
+            _ = width;
+            _ = height;
+            _ = count;
+            return error.Unsupported;
+        }
+
+        pub fn deinit(self: *WaylandPresent) void {
+            _ = self;
+        }
+
+        pub fn acquire(self: *WaylandPresent) error{Unsupported}!u32 {
+            _ = self;
+            return error.Unsupported;
+        }
+
+        pub fn present(self: *WaylandPresent, index: u32) void {
+            _ = self;
+            _ = index;
+        }
+    };
+
+    pub fn blitRgbaToXrgb(dst: []u8, src: []const u8, width: u32, height: u32) void {
+        _ = dst;
+        _ = src;
+        _ = width;
+        _ = height;
+    }
+};
 
 pub const GbmDevice = prism.platform.internal.gbm.Device;
 pub const GbmSurface = prism.platform.internal.gbm.Surface;
+pub const X11ForeignWindow = if (prism.platform.x11_enabled) prism.platform.x11.ForeignWindow else struct {
+    pub fn deinit(self: *@This()) void {
+        _ = self;
+    }
+};
 
 const EGLint = egl.EGLint;
 
@@ -127,6 +194,7 @@ pub const Display = struct {
     /// and the clear/present example use.
     device: ?prism.hal.Device = null,
     io_runtime: ?*std.Io.Threaded = null,
+    x11_visual_id: u32 = 0,
 
     pub fn deinit(self: *Display) void {
         if (self.device) |dev| dev.deinit();
@@ -615,12 +683,19 @@ pub const Surface = struct {
     /// on the app's wl_display, attached to the app's wl_surface on swap. Created
     /// lazily on the first present (and re-created on a window resize).
     wl_present: ?*wlw.WaylandPresent = null,
+    /// Native X11 window bridge. Owns Prism's private x11.zig connection and
+    /// platform surface, never the application's XID.
+    x11_window: ?*X11ForeignWindow = null,
 
     pub fn deinit(self: *Surface) void {
         unregisterSurface(self);
         const dev = self.display.device.?;
         if (self.wl_present) |wp| wp.deinit();
         if (self.hal_surface) |hs| dev.destroySurface(hs);
+        if (self.x11_window) |xw| {
+            xw.deinit();
+            gpa.destroy(xw);
+        }
         // A GBM window owns its platform.Surface adapter (freed after the HAL
         // surface that referenced it). A Wayland window's is caller-owned.
         if (self.owns_plat_surface) if (self.plat_surface) |ps| {
@@ -769,6 +844,40 @@ pub fn createGbmWindowSurface(display: *Display, config_index: usize, gbm_surfac
     }
 }
 
+pub fn createX11WindowSurface(display: *Display, config_index: usize, native: *anyopaque) prism.Error!*Surface {
+    if (comptime prism.platform.x11_enabled) {
+        const xid = std.math.cast(u32, @intFromPtr(native)) orelse return error.InvalidArgument;
+        if (xid == 0) return error.InvalidArgument;
+        const runtime = display.io_runtime orelse return error.InitializationFailed;
+        const display_z = std.c.getenv("DISPLAY") orelse return error.InitializationFailed;
+        const display_name = std.mem.span(display_z);
+
+        var env = std.process.Environ.Map.init(gpa);
+        defer env.deinit();
+        inline for (.{ "XAUTHORITY", "HOME" }) |name| {
+            if (std.c.getenv(name)) |value|
+                env.put(name, std.mem.span(value)) catch return error.OutOfMemory;
+        }
+
+        const foreign = gpa.create(X11ForeignWindow) catch return error.OutOfMemory;
+        foreign.* = prism.platform.x11.wrapWindow(gpa, runtime.io(), display_name, &env, xid) catch |err| {
+            if (std.c.getenv("PRISM_GLX_DEBUG") != null)
+                std.debug.print("[prism-egl] wrapping X11 window 0x{x} failed: {s}\n", .{ xid, @errorName(err) });
+            gpa.destroy(foreign);
+            return err;
+        };
+        errdefer {
+            foreign.deinit();
+            gpa.destroy(foreign);
+        }
+        const surface = try makeWindowSurface(display, config_index, &foreign.surface, false);
+        surface.x11_window = foreign;
+        return surface;
+    } else {
+        return error.Unsupported;
+    }
+}
+
 /// Build a window surface presenting through `plat_surface`. When `owns` is set
 /// the surface frees `plat_surface` on deinit (the GBM adapter); otherwise the
 /// caller owns it (a Wayland native window).
@@ -859,6 +968,10 @@ pub fn swapBuffers(ctx: *Context, surface: *Surface) prism.Error!void {
         .window => {
             const hs = surface.hal_surface orelse return error.InvalidArgument;
             try ctx.hal.present(hs, surface.backbuffer);
+            const plat = surface.plat_surface orelse return error.InvalidArgument;
+            const dims = plat.size();
+            if (dims[0] != surface.width or dims[1] != surface.height)
+                try resizeRenderTargets(surface, dims[0], dims[1]);
         },
         .wl_egl_window => try swapWaylandWindow(ctx, surface),
     }
@@ -866,6 +979,34 @@ pub fn swapBuffers(ctx: *Context, surface: *Surface) prism.Error!void {
 
 /// Number of wl_shm buffers behind a wl_egl_window surface (double-buffered).
 const WL_SWAPCHAIN_BUFFERS: u32 = 3; // triple-buffer: slack so present rarely blocks on release
+
+fn resizeRenderTargets(surface: *Surface, width: u32, height: u32) prism.Error!void {
+    if (width == 0 or height == 0 or (width == surface.width and height == surface.height)) return;
+    const dev = surface.display.device.?;
+    const new_bb = try createBackbuffer(dev, width, height);
+    errdefer dev.destroyResource(new_bb);
+    const new_msaa = if (surface.samples > 1)
+        try dev.createResource(.{ .image = .{
+            .width = width,
+            .height = height,
+            .format = .rgba8_unorm,
+            .samples = surface.samples,
+            .usage = .{ .render_target = true },
+        } })
+    else
+        null;
+
+    dev.destroyResource(surface.backbuffer);
+    if (surface.depth_buffer) |db| dev.destroyResource(db);
+    if (surface.stencil_buffer) |sb| dev.destroyResource(sb);
+    if (surface.msaa_backbuffer) |mb| dev.destroyResource(mb);
+    surface.backbuffer = new_bb;
+    surface.depth_buffer = null;
+    surface.stencil_buffer = null;
+    surface.msaa_backbuffer = new_msaa;
+    surface.width = width;
+    surface.height = height;
+}
 
 /// Present a wl_egl_window surface: read the (possibly resized) window, ensure a
 /// wl_shm swapchain on the app's display, blit the rendered HAL backbuffer into a
@@ -878,25 +1019,7 @@ fn swapWaylandWindow(ctx: *Context, surface: *Surface) prism.Error!void {
     // Honor a wl_egl_window_resize: if the window grew/shrank, rebuild the HAL
     // backbuffer + the wl_shm swapchain to the new size.
     if (parsed.width != surface.width or parsed.height != surface.height) {
-        const dev = surface.display.device.?;
-        const new_bb = try createBackbuffer(dev, parsed.width, parsed.height);
-        dev.destroyResource(surface.backbuffer);
-        surface.backbuffer = new_bb;
-        if (surface.depth_buffer) |db| {
-            dev.destroyResource(db);
-            surface.depth_buffer = null;
-        }
-        // Rebuild the multisampled render target at the new size (MSAA surfaces only).
-        if (surface.msaa_backbuffer) |mb| {
-            dev.destroyResource(mb);
-            surface.msaa_backbuffer = dev.createResource(.{ .image = .{
-                .width = parsed.width,
-                .height = parsed.height,
-                .format = .rgba8_unorm,
-                .samples = surface.samples,
-                .usage = .{ .render_target = true },
-            } }) catch null;
-        }
+        try resizeRenderTargets(surface, parsed.width, parsed.height);
         if (surface.wl_present) |wp| {
             wp.deinit();
             surface.wl_present = null;
@@ -1040,6 +1163,7 @@ pub fn supportsPlatform(platform: egl.EGLenum) bool {
         egl.EGL_PLATFORM_SURFACELESS_MESA => prism.platform.headless_enabled,
         egl.EGL_PLATFORM_WAYLAND_KHR => prism.platform.wayland_enabled,
         egl.EGL_PLATFORM_GBM_KHR => prism.platform.gbm_enabled,
+        egl.EGL_PLATFORM_X11_KHR => prism.platform.x11_enabled,
         egl.EGL_PLATFORM_NONE => prism.platform.headless_enabled or prism.platform.wayland_enabled,
         else => false,
     };
@@ -1091,6 +1215,18 @@ pub fn initialize(d: *Display) prism.Error!void {
         gpa.destroy(runtime);
     }
     const io = runtime.io();
+    if (comptime prism.platform.x11_enabled) {
+        if (d.platform == egl.EGL_PLATFORM_X11_KHR) {
+            const display_z = std.c.getenv("DISPLAY") orelse return error.InitializationFailed;
+            var env = std.process.Environ.Map.init(gpa);
+            defer env.deinit();
+            inline for (.{ "XAUTHORITY", "HOME" }) |name| {
+                if (std.c.getenv(name)) |value|
+                    env.put(name, std.mem.span(value)) catch return error.OutOfMemory;
+            }
+            d.x11_visual_id = try prism.platform.x11.defaultVisualId(gpa, io, std.mem.span(display_z), &env);
+        }
+    }
     // Enumeration is display-free: back it with the headless platform display (no
     // Wayland connection needed to enumerate configs or to allocate offscreen
     // pbuffers). A window surface supplies its own platform.Surface via the EGL
@@ -1133,6 +1269,7 @@ pub fn terminate(d: *Display) void {
         gpa.destroy(runtime);
         d.io_runtime = null;
     }
+    d.x11_visual_id = 0;
     d.initialized = false;
 }
 
@@ -1147,12 +1284,14 @@ pub const client_apis_string = "OpenGL_ES OpenGL";
 pub const extensions_string =
     (if (prism.platform.wayland_enabled) "EGL_KHR_platform_wayland EGL_EXT_platform_wayland " else "") ++
     (if (prism.platform.gbm_enabled) "EGL_KHR_platform_gbm EGL_MESA_platform_gbm " else "") ++
+    (if (prism.platform.x11_enabled) "EGL_KHR_platform_x11 EGL_EXT_platform_x11 " else "") ++
     (if (prism.platform.headless_enabled) "EGL_MESA_platform_surfaceless EGL_KHR_surfaceless_context" else "");
 /// Returned to libEGL via getVendorString(__EGL_VENDOR_STRING_PLATFORM_EXTENSIONS):
 /// the platform extensions libEGL itself advertises on our behalf.
 pub const platform_extensions_string =
     (if (prism.platform.wayland_enabled) "EGL_KHR_platform_wayland EGL_EXT_platform_wayland " else "") ++
     (if (prism.platform.gbm_enabled) "EGL_KHR_platform_gbm EGL_MESA_platform_gbm " else "") ++
+    (if (prism.platform.x11_enabled) "EGL_KHR_platform_x11 EGL_EXT_platform_x11 " else "") ++
     (if (prism.platform.headless_enabled) "EGL_MESA_platform_surfaceless" else "");
 
 pub fn queryString(name: EGLint) ?[*:0]const u8 {
@@ -1377,8 +1516,7 @@ test "supportsPlatform accepts surfaceless, wayland, gbm, and default" {
     try std.testing.expectEqual(prism.platform.wayland_enabled, supportsPlatform(egl.EGL_PLATFORM_WAYLAND_KHR));
     try std.testing.expectEqual(prism.platform.gbm_enabled, supportsPlatform(egl.EGL_PLATFORM_GBM_KHR));
     try std.testing.expectEqual(prism.platform.headless_enabled or prism.platform.wayland_enabled, supportsPlatform(egl.EGL_PLATFORM_NONE));
-    // An unsupported platform (X11) stays another vendor's job.
-    try std.testing.expect(!supportsPlatform(egl.EGL_PLATFORM_X11_KHR));
+    try std.testing.expectEqual(prism.platform.x11_enabled, supportsPlatform(egl.EGL_PLATFORM_X11_KHR));
 }
 
 test "supportsAPI: GL and GLES only" {
@@ -1404,7 +1542,7 @@ test "getPlatformDisplay is stable per (platform, native) and initialize reports
     terminate(d1);
     try std.testing.expect(!d1.initialized);
     // An unsupported platform yields no display and no error (another vendor's job).
-    try std.testing.expectEqual(@as(?*Display, null), getPlatformDisplay(egl.EGL_PLATFORM_X11_KHR, null));
+    try std.testing.expectEqual(prism.platform.x11_enabled, getPlatformDisplay(egl.EGL_PLATFORM_X11_KHR, null) != null);
 }
 
 test "gbm: getPlatformDisplay + createGbmWindowSurface build a window surface aliasing the gbm buffer" {

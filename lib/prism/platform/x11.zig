@@ -42,9 +42,14 @@ const X11Surface = struct {
     pixels: []u8,
     wm_protocols: u32,
     wm_delete_window: u32,
+    owns_window: bool,
 
     fn currentBuffer(ptr: *anyopaque) hal.Error!platform.Buffer {
         const self: *X11Surface = @ptrCast(@alignCast(ptr));
+        // Foreign-window clients (EGL/GLX/Vulkan) drive their own event loop.
+        // Query geometry at present time so a host-side resize updates Prism's
+        // staging buffer without requiring that host to pump our connection.
+        if (!self.owns_window) try self.refreshGeometry();
         return .{
             .bytes = self.pixels,
             .width = self.width,
@@ -54,6 +59,16 @@ const X11Surface = struct {
             // little-endian host its ZPixmap bytes are B,G,R,X.
             .format = .bgra8_unorm,
         };
+    }
+
+    fn refreshGeometry(self: *X11Surface) hal.Error!void {
+        const cookie = xproto.get_geometry(self.client, self.window) catch return error.DeviceLost;
+        var xe: x11.wire.XError = undefined;
+        var reply = self.client.awaitReply(xproto.GetGeometryReply, cookie, &xe) catch return error.DeviceLost;
+        defer reply.deinit();
+        const geometry = xproto.decodeGetGeometryReply(reply.bytes);
+        if (geometry.depth != self.depth) return error.InitializationFailed;
+        try self.resize(geometry.width, geometry.height);
     }
 
     fn sendFrame(self: *X11Surface) hal.Error!void {
@@ -85,6 +100,35 @@ const X11Surface = struct {
                 self.pixels[begin..end],
             ) catch return error.DeviceLost;
             y += rows;
+        }
+    }
+
+    fn sendRegion(self: *X11Surface, x: u32, y: u32, width: u32, height: u32) hal.Error!void {
+        if (x >= self.width or y >= self.height) return;
+        const clipped_width = @min(width, self.width - x);
+        const clipped_height = @min(height, self.height - y);
+        if (clipped_width == 0 or clipped_height == 0) return;
+        // A narrow damage rectangle is non-contiguous in the full framebuffer.
+        // Send one naturally 32-bit-padded ZPixmap scanline per request instead
+        // of retransmitting the entire window after an Expose event.
+        var row: u32 = 0;
+        while (row < clipped_height) : (row += 1) {
+            const begin = @as(usize, y + row) * self.stride + @as(usize, x) * 4;
+            const end = begin + @as(usize, clipped_width) * 4;
+            _ = xproto.put_image(
+                self.client,
+                self.gpa,
+                2,
+                self.window,
+                self.gc,
+                @intCast(clipped_width),
+                1,
+                @intCast(x),
+                @intCast(y + row),
+                0,
+                self.depth,
+                self.pixels[begin..end],
+            ) catch return error.DeviceLost;
         }
     }
 
@@ -123,7 +167,8 @@ const X11Surface = struct {
                     }
                 },
                 .expose => |ev| {
-                    if (ev.window == self.window and ev.count == 0) try self.sendFrame();
+                    if (ev.window == self.window)
+                        try self.sendRegion(@intCast(ev.x), @intCast(ev.y), ev.width, ev.height);
                 },
                 .destroy_notify => |ev| if (ev.window == self.window) return .closed,
                 .client_message => |ev| {
@@ -150,7 +195,7 @@ const X11Surface = struct {
     fn deinit(ptr: *anyopaque) void {
         const self: *X11Surface = @ptrCast(@alignCast(ptr));
         _ = xproto.free_gc(self.client, self.gc) catch {};
-        _ = xproto.destroy_window(self.client, self.window) catch {};
+        if (self.owns_window) _ = xproto.destroy_window(self.client, self.window) catch {};
         self.gpa.free(self.pixels);
         self.gpa.destroy(self);
     }
@@ -272,6 +317,60 @@ const X11Display = struct {
             .pixels = pixels,
             .wm_protocols = self.wm_protocols,
             .wm_delete_window = self.wm_delete_window,
+            .owns_window = true,
+        };
+        return .{ .ptr = surface, .vtable = &X11Surface.vtable };
+    }
+
+    fn createForeignSurface(self: *X11Display, window: u32) hal.Error!platform.Surface {
+        // Query the application's existing drawable instead of assuming the
+        // root visual dimensions. A separate X11 connection may render to the
+        // same server-side XID; XIDs are connection-independent resources.
+        const geometry_cookie = xproto.get_geometry(&self.client, window) catch return error.InitializationFailed;
+        var xe: x11.wire.XError = undefined;
+        var reply = self.client.awaitReply(xproto.GetGeometryReply, geometry_cookie, &xe) catch
+            return error.InitializationFailed;
+        defer reply.deinit();
+        const geometry = xproto.decodeGetGeometryReply(reply.bytes);
+        if (geometry.width == 0 or geometry.height == 0 or geometry.depth != self.depth)
+            return error.InitializationFailed;
+
+        // Event selection is per client, so this does not replace the host
+        // application's mask. It lets Prism observe resize/expose/destroy on
+        // application-owned windows through its own x11.zig connection.
+        _ = xproto.change_window_attributes(
+            &self.client,
+            self.gpa,
+            window,
+            .{ .event_mask = event_exposure | event_structure_notify },
+        ) catch return error.InitializationFailed;
+
+        const gc = self.client.generateId();
+        _ = xproto.create_gc(&self.client, self.gpa, gc, window, .{ .graphics_exposures = 0 }) catch
+            return error.InitializationFailed;
+        errdefer _ = xproto.free_gc(&self.client, gc) catch {};
+
+        const stride = std.math.mul(u32, geometry.width, 4) catch return error.OutOfMemory;
+        const len = std.math.mul(usize, stride, geometry.height) catch return error.OutOfMemory;
+        const pixels = self.gpa.alloc(u8, len) catch return error.OutOfMemory;
+        errdefer self.gpa.free(pixels);
+        @memset(pixels, 0);
+
+        const surface = self.gpa.create(X11Surface) catch return error.OutOfMemory;
+        surface.* = .{
+            .gpa = self.gpa,
+            .client = &self.client,
+            .window = window,
+            .gc = gc,
+            .width = geometry.width,
+            .height = geometry.height,
+            .stride = stride,
+            .depth = geometry.depth,
+            .max_request_bytes = self.max_request_bytes,
+            .pixels = pixels,
+            .wm_protocols = self.wm_protocols,
+            .wm_delete_window = self.wm_delete_window,
+            .owns_window = false,
         };
         return .{ .ptr = surface, .vtable = &X11Surface.vtable };
     }
@@ -344,9 +443,56 @@ pub fn create(
     return .{ .ptr = display, .vtable = &X11Display.vtable };
 }
 
+/// A platform surface over an application-owned X11 window. Prism owns its
+/// private X11 connection and GC, but never maps or destroys `window`.
+pub const ForeignWindow = struct {
+    display: platform.Display,
+    surface: platform.Surface,
+
+    pub fn deinit(self: *ForeignWindow) void {
+        self.surface.deinit();
+        self.display.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Connect independently to DISPLAY and wrap an existing XID. This is the
+/// common native-window bridge used by EGL X11, Vulkan XCB, and GLX; it avoids
+/// depending on either libX11 or libxcb while remaining compatible with windows
+/// those libraries created.
+pub fn wrapWindow(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    display_name: []const u8,
+    environ: ?*const std.process.Environ.Map,
+    window: u32,
+) hal.Error!ForeignWindow {
+    var display = try create(gpa, io, display_name, environ);
+    errdefer display.deinit();
+    const impl: *X11Display = @ptrCast(@alignCast(display.ptr));
+    const surface = try impl.createForeignSurface(window);
+    return .{ .display = display, .surface = surface };
+}
+
+/// Query the server's default root visual without retaining a connection.
+/// EGL uses this for EGL_NATIVE_VISUAL_ID so Xlib clients create a window whose
+/// depth/visual matches the X11 presenter.
+pub fn defaultVisualId(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    display_name: []const u8,
+    environ: ?*const std.process.Environ.Map,
+) hal.Error!u32 {
+    var client = x11.Client.open(gpa, io, display_name, null, environ) catch
+        return error.InitializationFailed;
+    defer client.close();
+    const screen = client.defaultScreen() orelse return error.InitializationFailed;
+    return screen.root_visual;
+}
+
 test "resolveDisplay reads DISPLAY" {
-    var env = std.process.Environ.Map.empty;
-    defer env.deinit(std.testing.allocator);
-    try env.put(std.testing.allocator, "DISPLAY", ":42");
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("DISPLAY", ":42");
     try std.testing.expectEqualStrings(":42", try resolveDisplay(&env));
 }

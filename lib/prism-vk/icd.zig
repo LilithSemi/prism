@@ -6,7 +6,58 @@ const std = @import("std");
 const prism = @import("prism");
 const vk = @import("vk.zig");
 /// The libwayland-client WSI (standard-app present path via wl_shm).
-const wsi_wl = @import("wsi_wayland.zig");
+const wsi_wl = if (prism.platform.wayland_enabled) @import("wsi_wayland.zig") else DisabledWaylandWsi;
+
+/// Type-compatible fallback that keeps non-Wayland builds independent of both
+/// wayland.zig and libwayland-client.
+const DisabledWaylandWsi = struct {
+    pub const wl_display = anyopaque;
+    pub const wl_surface = anyopaque;
+    pub const DisabledBuffer = struct { pixels: []u8 };
+
+    pub const WaylandWsi = struct {
+        buffers: []DisabledBuffer,
+
+        pub fn init(
+            gpa: std.mem.Allocator,
+            display: *wl_display,
+            surface: *wl_surface,
+            width: u32,
+            height: u32,
+            count: u32,
+        ) error{Unsupported}!*WaylandWsi {
+            _ = gpa;
+            _ = display;
+            _ = surface;
+            _ = width;
+            _ = height;
+            _ = count;
+            return error.Unsupported;
+        }
+
+        pub fn deinit(self: *WaylandWsi) void {
+            _ = self;
+        }
+
+        pub fn acquire(self: *WaylandWsi, timeout: u64) error{ Unsupported, NotReady, Timeout }!u32 {
+            _ = self;
+            _ = timeout;
+            return error.Unsupported;
+        }
+
+        pub fn present(self: *WaylandWsi, index: u32) void {
+            _ = self;
+            _ = index;
+        }
+    };
+
+    pub fn blitRgbaToXrgb(dst: []u8, src: []const u8, width: u32, height: u32) void {
+        _ = dst;
+        _ = src;
+        _ = width;
+        _ = height;
+    }
+};
 
 /// Loader ICD interface version Prism negotiates. v5 is the modern interface:
 /// the loader calls vk_icdGetInstanceProcAddr for everything and expects the ICD
@@ -106,8 +157,11 @@ fn isHardwareDriver(d: prism.Driver) bool {
 const InstExt = struct { name: []const u8, ver: u32 };
 const instance_extensions = [_]InstExt{
     .{ .name = "VK_KHR_surface", .ver = 25 },
+} ++ (if (prism.platform.wayland_enabled) [_]InstExt{
     .{ .name = "VK_KHR_wayland_surface", .ver = 6 },
-};
+} else [_]InstExt{}) ++ (if (prism.platform.x11_enabled) [_]InstExt{
+    .{ .name = "VK_KHR_xcb_surface", .ver = 6 },
+} else [_]InstExt{});
 
 pub fn enumerateInstanceExtensionProperties(
     pLayerName: ?[*:0]const u8,
@@ -3439,6 +3493,12 @@ pub fn getFenceStatus(
 // The kind is chosen by whether `.display` is non-null at create time.
 
 const platform = prism.platform;
+const X11ForeignWindow = if (prism.platform.x11_enabled) platform.x11.ForeignWindow else struct {
+    surface: platform.Surface,
+    pub fn deinit(self: *@This()) void {
+        _ = self;
+    }
+};
 
 /// A VkSurfaceKHR. Either a standard libwayland surface (display + surface
 /// pointers from the app's libwayland), or the legacy Prism platform surface.
@@ -3450,6 +3510,11 @@ pub const Surface = union(enum) {
     },
     /// Legacy in-tree path: Prism's own platform surface.
     prism: *platform.Surface,
+    /// Standard XCB app window, presented through a private x11.zig connection.
+    x11: struct {
+        runtime: *std.Io.Threaded,
+        foreign: *X11ForeignWindow,
+    },
 
     fn toHandle(self: *Surface) vk.VkSurfaceKHR {
         return @intCast(@intFromPtr(self));
@@ -3558,6 +3623,52 @@ pub fn createWaylandSurfaceKHR(
     return .VK_SUCCESS;
 }
 
+pub fn createXcbSurfaceKHR(
+    instance: vk.VkInstance,
+    pCreateInfo: ?*const vk.VkXcbSurfaceCreateInfoKHR,
+    pAllocator: ?*const vk.VkAllocationCallbacks,
+    pSurface: *vk.VkSurfaceKHR,
+) callconv(.c) vk.VkResult {
+    _ = instance;
+    _ = pAllocator;
+    if (comptime !prism.platform.x11_enabled) return .VK_ERROR_EXTENSION_NOT_PRESENT;
+    const ci = pCreateInfo orelse return .VK_ERROR_INITIALIZATION_FAILED;
+    if (ci.connection == null or ci.window == 0) return .VK_ERROR_INITIALIZATION_FAILED;
+    const display_z = std.c.getenv("DISPLAY") orelse return .VK_ERROR_INITIALIZATION_FAILED;
+
+    const runtime = allocator.create(std.Io.Threaded) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
+    runtime.* = .init(allocator, .{});
+    errdefer {
+        runtime.deinit();
+        allocator.destroy(runtime);
+    }
+    var env = std.process.Environ.Map.init(allocator);
+    defer env.deinit();
+    inline for (.{ "XAUTHORITY", "HOME" }) |name| {
+        if (std.c.getenv(name)) |value|
+            env.put(name, std.mem.span(value)) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    const foreign = allocator.create(X11ForeignWindow) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
+    foreign.* = platform.x11.wrapWindow(
+        allocator,
+        runtime.io(),
+        std.mem.span(display_z),
+        &env,
+        ci.window,
+    ) catch {
+        allocator.destroy(foreign);
+        return .VK_ERROR_INITIALIZATION_FAILED;
+    };
+    errdefer {
+        foreign.deinit();
+        allocator.destroy(foreign);
+    }
+    const surface = allocator.create(Surface) catch return .VK_ERROR_OUT_OF_HOST_MEMORY;
+    surface.* = .{ .x11 = .{ .runtime = runtime, .foreign = foreign } };
+    pSurface.* = surface.toHandle();
+    return .VK_SUCCESS;
+}
+
 pub fn destroySurfaceKHR(
     instance: vk.VkInstance,
     surface: vk.VkSurfaceKHR,
@@ -3566,7 +3677,17 @@ pub fn destroySurfaceKHR(
     _ = instance;
     _ = pAllocator;
     if (surface == 0) return;
-    allocator.destroy(Surface.fromHandle(surface));
+    const s = Surface.fromHandle(surface);
+    switch (s.*) {
+        .x11 => |x| {
+            x.foreign.deinit();
+            allocator.destroy(x.foreign);
+            x.runtime.deinit();
+            allocator.destroy(x.runtime);
+        },
+        else => {},
+    }
+    allocator.destroy(s);
 }
 
 pub fn getPhysicalDeviceSurfaceSupportKHR(
@@ -3596,6 +3717,19 @@ pub fn getPhysicalDeviceWaylandPresentationSupportKHR(
     return vk.VK_TRUE;
 }
 
+pub fn getPhysicalDeviceXcbPresentationSupportKHR(
+    physicalDevice: vk.VkPhysicalDevice,
+    queueFamilyIndex: u32,
+    connection: ?*anyopaque,
+    visual_id: u32,
+) callconv(.c) vk.VkBool32 {
+    _ = physicalDevice;
+    _ = queueFamilyIndex;
+    _ = connection;
+    _ = visual_id;
+    return if (prism.platform.x11_enabled) vk.VK_TRUE else vk.VK_FALSE;
+}
+
 pub fn getPhysicalDeviceSurfaceCapabilitiesKHR(
     physicalDevice: vk.VkPhysicalDevice,
     surface: vk.VkSurfaceKHR,
@@ -3603,6 +3737,10 @@ pub fn getPhysicalDeviceSurfaceCapabilitiesKHR(
 ) callconv(.c) vk.VkResult {
     _ = physicalDevice;
     const s = Surface.fromHandle(surface);
+    switch (s.*) {
+        .x11 => |x| _ = x.foreign.surface.currentBuffer() catch return .VK_ERROR_SURFACE_LOST_KHR,
+        else => {},
+    }
     // Legacy Prism surfaces carry a fixed extent. Libwayland surfaces don't (the
     // app drives the size via xdg-shell), so report the "swapchain decides"
     // sentinel 0xFFFFFFFF for currentExtent and a generous max, exactly like
@@ -3613,14 +3751,20 @@ pub fn getPhysicalDeviceSurfaceCapabilitiesKHR(
             break :blk .{ .width = sz[0], .height = sz[1] };
         },
         .libwayland => .{ .width = 0xFFFFFFFF, .height = 0xFFFFFFFF },
+        .x11 => |x| blk: {
+            const sz = x.foreign.surface.size();
+            break :blk .{ .width = sz[0], .height = sz[1] };
+        },
     };
     const min_ext: vk.VkExtent2D = switch (s.*) {
         .prism => current,
         .libwayland => .{ .width = 1, .height = 1 },
+        .x11 => current,
     };
     const max_ext: vk.VkExtent2D = switch (s.*) {
         .prism => current,
         .libwayland => .{ .width = 16384, .height = 16384 },
+        .x11 => current,
     };
     pCaps.* = .{
         .minImageCount = 2,
@@ -3752,6 +3896,23 @@ pub fn createSwapchainKHR(
         },
         .prism => |ps| {
             // (B) legacy Prism: the HAL surface + a context for ctx.present.
+            const hal_surface = dev.hal().createSurface(@ptrCast(ps)) catch
+                return .VK_ERROR_INITIALIZATION_FAILED;
+            errdefer dev.hal().destroySurface(hal_surface);
+            const ctx = dev.hal().createContext() catch return .VK_ERROR_INITIALIZATION_FAILED;
+            errdefer ctx.deinit();
+            sc.* = .{
+                .dev = dev,
+                .surface = s,
+                .width = w,
+                .height = h,
+                .images = images,
+                .hal_surface = hal_surface,
+                .ctx = ctx,
+            };
+        },
+        .x11 => |x| {
+            const ps = &x.foreign.surface;
             const hal_surface = dev.hal().createSurface(@ptrCast(ps)) catch
                 return .VK_ERROR_INITIALIZATION_FAILED;
             errdefer dev.hal().destroySurface(hal_surface);
@@ -3975,9 +4136,11 @@ pub fn destroySemaphore(
 /// The WSI (M6) entry points, shared by the device + instance proc-addr tables.
 const wsi_dispatch_table = .{
     .{ "vkCreateWaylandSurfaceKHR", asVoidFn(createWaylandSurfaceKHR) },
+    .{ "vkCreateXcbSurfaceKHR", asVoidFn(createXcbSurfaceKHR) },
     .{ "vkDestroySurfaceKHR", asVoidFn(destroySurfaceKHR) },
     .{ "vkGetPhysicalDeviceSurfaceSupportKHR", asVoidFn(getPhysicalDeviceSurfaceSupportKHR) },
     .{ "vkGetPhysicalDeviceWaylandPresentationSupportKHR", asVoidFn(getPhysicalDeviceWaylandPresentationSupportKHR) },
+    .{ "vkGetPhysicalDeviceXcbPresentationSupportKHR", asVoidFn(getPhysicalDeviceXcbPresentationSupportKHR) },
     .{ "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", asVoidFn(getPhysicalDeviceSurfaceCapabilitiesKHR) },
     .{ "vkGetPhysicalDeviceSurfaceFormatsKHR", asVoidFn(getPhysicalDeviceSurfaceFormatsKHR) },
     .{ "vkGetPhysicalDeviceSurfacePresentModesKHR", asVoidFn(getPhysicalDeviceSurfacePresentModesKHR) },

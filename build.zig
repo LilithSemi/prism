@@ -189,21 +189,24 @@ pub fn build(b: *std.Build) void {
     prism_tests.addPassthruArgs();
     test_step.dependOn(&prism_tests.step);
 
-    // The GLX vendor, EGL/GLVND vendor, and Vulkan ICD shared libraries.
-    if (!target.result.cpu.arch.isWasm() and target.result.os.tag != .uefi and !target.result.abi.isAndroid()) {
-        // The EGL vendor and the Vulkan ICD present over Wayland and link the
-        // system libwayland-client, which exists only on Linux. The GLX vendor
-        // speaks X11 and needs no wayland, so it keeps the wider gate. The CI's
-        // aarch64-darwin check builds `zig build install`, and these two cannot
-        // exist there at all.
-        const wayland_hosts = target.result.os.tag == .linux and enable_wayland;
-        const Frontend = struct { name: []const u8, root: []const u8, wayland: bool };
+    const build_glx = linux_host and enable_x11;
+    const build_egl = linux_host and (enable_headless or enable_gbm or enable_wayland or enable_x11);
+    const build_vk = linux_host and (enable_headless or enable_wayland or enable_x11);
+
+    // Frontends are selected by the capabilities they expose. Wayland is an
+    // optional WSI module, not a prerequisite for headless/GBM/X11 EGL or for
+    // the Vulkan ICD itself.
+    if (linux_host) {
+        const Frontend = struct { name: []const u8, root: []const u8, enabled: bool, uses_wayland: bool };
         for ([_]Frontend{
-            .{ .name = "GLX_prism", .root = "lib/prism-gl.zig", .wayland = false },
-            .{ .name = "EGL_prism", .root = "lib/prism-egl.zig", .wayland = true },
-            .{ .name = "prism-vk", .root = "lib/prism-vk.zig", .wayland = true },
+            // GLX embeds the EGL state implementation. When Wayland is enabled
+            // in the shared Prism module that state selects its real Wayland
+            // presenter, so the GLX artifact must receive the same dependency.
+            .{ .name = "GLX_prism", .root = "lib/prism-gl.zig", .enabled = build_glx, .uses_wayland = enable_wayland },
+            .{ .name = "EGL_prism", .root = "lib/prism-egl.zig", .enabled = build_egl, .uses_wayland = enable_wayland },
+            .{ .name = "prism-vk", .root = "lib/prism-vk.zig", .enabled = build_vk, .uses_wayland = enable_wayland },
         }) |fe| {
-            if (fe.wayland and !wayland_hosts) continue;
+            if (!fe.enabled) continue;
             // The ICD's wsi_wayland.zig and the EGL vendor's wl_egl_window.zig both use
             // wayland.shm for the wl_shm present pool, so both need Prism's Zig wayland
             // library directly.
@@ -216,18 +219,31 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &base_imports,
             });
-            if (fe.wayland) {
+            // EGL/Vulkan use the platform C ABI for environment access even
+            // when their optional Wayland WSI module is absent.
+            fmod.link_libc = true;
+            if (fe.uses_wayland) {
                 fmod.addImport("wayland", wl_dep.?.module("wayland"));
                 // The libwayland present path links libwayland-client (the wl_* C API),
                 // bound at runtime to the host app's already-loaded copy.
-                fmod.link_libc = true;
                 fmod.linkSystemLibrary("wayland-client", .{});
             }
-            b.installArtifact(b.addLibrary(.{ .name = fe.name, .root_module = fmod, .linkage = .dynamic }));
+            if (std.mem.eql(u8, fe.name, "GLX_prism"))
+                fmod.linkSystemLibrary("x11", .{ .use_pkg_config = .force });
+            b.installArtifact(b.addLibrary(.{
+                .name = fe.name,
+                .root_module = fmod,
+                .linkage = .dynamic,
+                // GLVND loads GLX vendors by the ABI soname libGLX_<vendor>.so.0.
+                .version = if (std.mem.eql(u8, fe.name, "GLX_prism")) .{ .major = 0, .minor = 0, .patch = 0 } else null,
+            }));
             // EGL's oracle suite exercises its surfaceless platform extensively.
             // The library still compiles for a Wayland-only configuration, but
             // those tests are not applicable when headless was not selected.
             if (std.mem.eql(u8, fe.name, "EGL_prism") and !enable_headless) continue;
+            // GLX embeds the EGL/GLES implementation, so its reachable test set
+            // includes the same surfaceless oracles.
+            if (std.mem.eql(u8, fe.name, "GLX_prism") and !enable_headless) continue;
             const frontend_tests = b.addRunArtifact(b.addTest(.{ .root_module = fmod }));
             frontend_tests.addPassthruArgs();
             test_step.dependOn(&frontend_tests.step);
@@ -266,23 +282,23 @@ pub fn build(b: *std.Build) void {
         b.step("run-triangle", "Run the triangle on Wayland or X11").dependOn(&b.addRunArtifact(triangle_exe).step);
     }
 
-    // Render the loader/vendor JSON templates, replacing @LIBDIR@ with the install lib dir.
-    // They describe the Vulkan ICD and the EGL vendor library, both Linux-only. The install
-    // prefix is known only while the install step runs, so the substitution runs there too.
-    if (target.result.os.tag == .linux and !target.result.abi.isAndroid() and enable_wayland) {
-        inline for (.{
-            .{ "data/vulkan/icd.d/prism.json.in", "share/vulkan/icd.d/prism.json" },
-            .{ "data/glvnd/egl_vendor.d/50_prism.json.in", "share/glvnd/egl_vendor.d/50_prism.json" },
-        }) |pair| {
+    // Render loader/vendor JSON only for frontends that exist in this build.
+    if (linux_host) {
+        const Manifest = struct { source: []const u8, dest: []const u8, enabled: bool };
+        for ([_]Manifest{
+            .{ .source = "data/vulkan/icd.d/prism.json.in", .dest = "share/vulkan/icd.d/prism.json", .enabled = build_vk },
+            .{ .source = "data/glvnd/egl_vendor.d/50_prism.json.in", .dest = "share/glvnd/egl_vendor.d/50_prism.json", .enabled = build_egl },
+        }) |manifest| {
+            if (!manifest.enabled) continue;
             const render = b.addSystemCommand(&.{"sed"});
             render.addDirectoryArg2(.{ .relative = .{ .base = .install_lib } }, .{
                 .prefix = "s|@LIBDIR@|",
                 .suffix = "|g",
                 .make_absolute = true,
             });
-            render.addFileArg(b.path(pair[0]));
-            const out = render.captureStdOut(.{ .basename = std.fs.path.basename(pair[1]) });
-            b.getInstallStep().dependOn(&b.addInstallFile(out, pair[1]).step);
+            render.addFileArg(b.path(manifest.source));
+            const out = render.captureStdOut(.{ .basename = std.fs.path.basename(manifest.dest) });
+            b.getInstallStep().dependOn(&b.addInstallFile(out, manifest.dest).step);
         }
     }
 }

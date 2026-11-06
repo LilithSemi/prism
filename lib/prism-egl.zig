@@ -9,7 +9,7 @@ pub const egl = @import("prism-egl/egl.zig");
 pub const state = @import("prism-egl/state.zig");
 pub const vendor = @import("prism-egl/vendor.zig");
 pub const gles = @import("prism-egl/gles.zig");
-pub const wl_egl_window = @import("prism-egl/wl_egl_window.zig");
+pub const wl_egl_window = state.wayland_window;
 
 // GLVND EGL vendor entry point
 
