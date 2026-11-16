@@ -8,6 +8,7 @@ const prism = @import("prism");
 const egl = @import("egl.zig");
 pub const wayland_window = if (prism.platform.wayland_enabled) @import("wl_egl_window.zig") else DisabledWaylandEgl;
 const wlw = wayland_window;
+const DmaPresent = if (prism.platform.wayland_enabled) @import("dma_present.zig").Present else opaque {};
 
 /// Type-compatible fallback that keeps non-Wayland builds independent of both
 /// wayland.zig and libwayland-client.
@@ -81,8 +82,9 @@ pub const X11ForeignWindow = if (prism.platform.x11_enabled) prism.platform.x11.
 const EGLint = egl.EGLint;
 
 /// Process-wide allocator for EGL objects. EGL has no allocator parameter, so
-/// we own one (page allocator, like the Vulkan ICD's object allocations).
-pub const gpa = std.heap.page_allocator;
+/// we own one. Reuse small allocations across draws and shader compilation rather
+/// than mapping and unmapping whole pages for each temporary object.
+pub const gpa = std.heap.smp_allocator;
 
 /// HAL driver pin for new EGL displays. Null = auto-detect (real hardware first,
 /// software last). There is no env knob. The in-tree software oracles pin "software"
@@ -238,6 +240,137 @@ pub const Display = struct {
 /// makes one current per-thread. The minimal GLES tracker drives the HAL through it.
 var batching_enabled_cache: ?bool = null;
 
+/// CPU expansions only: cached data is copied into each draw's own GPU buffer.
+/// Exact source comparisons also cover client arrays and in-place mapped writes.
+pub const VertexCache = struct {
+    const budget = 32 * 1024 * 1024;
+    const minimum_indices = 256;
+    const Entry = struct {
+        key: []u8 = &.{},
+        indices: []u32 = &.{},
+        sources: [][]u8 = &.{},
+        expanded: []u8 = &.{},
+        cost: usize = 0,
+        used: u64 = 0,
+        fingerprint: u64 = 0,
+        id: u64 = 0,
+
+        fn deinit(self: Entry) void {
+            gpa.free(self.key);
+            gpa.free(self.indices);
+            for (self.sources) |source| gpa.free(source);
+            gpa.free(self.sources);
+            gpa.free(self.expanded);
+        }
+    };
+    entries: std.ArrayListUnmanaged(Entry) = .empty,
+    bytes: usize = 0,
+    sequence: u64 = 0,
+    hits: u64 = 0,
+    misses: u64 = 0,
+    next_id: u64 = 1,
+    pub const Hit = struct { bytes: []const u8, id: u64 };
+
+    fn fingerprint(key: []const u8, indices: []const u32, sources: []const []const u8) u64 {
+        var hash = std.hash.Wyhash.init(0);
+        hash.update(key);
+        sample(&hash, std.mem.sliceAsBytes(indices));
+        for (sources) |source| sample(&hash, source);
+        return hash.final();
+    }
+
+    fn sample(hash: *std.hash.Wyhash, bytes: []const u8) void {
+        hash.update(std.mem.asBytes(&bytes.len));
+        if (bytes.len <= 128) {
+            hash.update(bytes);
+        } else {
+            // This is only a rejection filter. Sampling bounds its cost even
+            // for large meshes; the full comparison below decides every hit.
+            for (0..8) |i| {
+                const start = (bytes.len - 16) * i / 7;
+                hash.update(bytes[start..][0..16]);
+            }
+        }
+    }
+
+    fn bytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        var offset: usize = 0;
+        // Combine four NEON comparisons before reducing to a scalar. Reducing
+        // every sixteen bytes makes large unchanged mesh snapshots expensive.
+        while (a.len - offset >= 64) : (offset += 64) {
+            var difference: @Vector(16, u8) = @splat(0);
+            inline for (0..4) |i| {
+                const start = offset + i * 16;
+                difference |= @as(@Vector(16, u8), a[start..][0..16].*) ^ @as(@Vector(16, u8), b[start..][0..16].*);
+            }
+            if (@reduce(.Or, difference != @as(@Vector(16, u8), @splat(0)))) return false;
+        }
+        return std.mem.eql(u8, a[offset..], b[offset..]);
+    }
+
+    pub fn deinit(self: *VertexCache) void {
+        for (self.entries.items) |entry| entry.deinit();
+        self.entries.deinit(gpa);
+        self.* = .{};
+    }
+
+    pub fn find(self: *VertexCache, key: []const u8, indices: []const u32, sources: []const []const u8) ?Hit {
+        if (indices.len < minimum_indices) return null;
+        const wanted = fingerprint(key, indices, sources);
+        self.sequence +%= 1;
+        outer: for (self.entries.items) |*entry| {
+            // Reject other meshes before walking their potentially large index
+            // and attribute snapshots. Exact comparisons still guard collisions.
+            if (entry.fingerprint != wanted) continue;
+            if (!std.mem.eql(u8, key, entry.key) or !bytesEqual(std.mem.sliceAsBytes(indices), std.mem.sliceAsBytes(entry.indices)) or sources.len != entry.sources.len) continue;
+            for (sources, entry.sources) |source, saved|
+                if (!bytesEqual(source, saved)) continue :outer;
+            entry.used = self.sequence;
+            self.hits +%= 1;
+            return .{ .bytes = entry.expanded, .id = entry.id };
+        }
+        self.misses +%= 1;
+        return null;
+    }
+
+    pub fn remember(self: *VertexCache, key: []const u8, indices: []const u32, sources: []const []const u8, expanded: []const u8) !u64 {
+        if (indices.len < minimum_indices) return 0;
+        if (indices.len > budget / 4) return 0;
+        var cost = indices.len * 4;
+        for ([_]usize{ key.len, expanded.len }) |size| {
+            if (size > budget - cost) return 0;
+            cost += size;
+        }
+        for (sources) |source| {
+            if (source.len > budget - cost) return 0;
+            cost += source.len;
+        }
+        var entry: Entry = .{ .cost = cost, .used = self.sequence, .fingerprint = fingerprint(key, indices, sources), .id = self.next_id };
+        errdefer entry.deinit();
+        entry.key = try gpa.dupe(u8, key);
+        entry.indices = try gpa.dupe(u32, indices);
+        entry.expanded = try gpa.dupe(u8, expanded);
+        entry.sources = try gpa.alloc([]u8, sources.len);
+        for (entry.sources) |*source| source.* = &.{};
+        for (sources, entry.sources) |source, *saved| saved.* = try gpa.dupe(u8, source);
+        while (self.entries.items.len >= 128 or self.bytes > budget - cost) {
+            var oldest: usize = 0;
+            for (self.entries.items, 0..) |candidate, i|
+                if (candidate.used < self.entries.items[oldest].used) {
+                    oldest = i;
+                };
+            const evicted = self.entries.swapRemove(oldest);
+            self.bytes -= evicted.cost;
+            evicted.deinit();
+        }
+        try self.entries.append(gpa, entry);
+        self.bytes += cost;
+        self.next_id += 1;
+        return entry.id;
+    }
+};
+
 pub const Context = struct {
     display: *Display,
     config: usize, // index into `configs`
@@ -258,6 +391,12 @@ pub const Context = struct {
     // before any buffer is reused, so reuse is safe.
     vb_pool: std.ArrayListUnmanaged(PoolVb) = .empty,
     vb_used: usize = 0,
+    // Gather attributes in cached host memory before a single contiguous GPU
+    // upload. Small scattered writes to uncached GPU mappings are expensive.
+    vertex_staging: std.ArrayListUnmanaged(u8) = .empty,
+    vertex_cache: VertexCache = .{},
+    frame_profile: FrameProfile = .{},
+    incomplete_texture_2d: ?*prism.hal.Resource = null,
 
     // Draw batching: when active, drawArraysUboTarget records into `batch_cb` instead of
     // submitting. Accumulated draws flush at swapBuffers, GPU-result readback, render-target
@@ -270,7 +409,74 @@ pub const Context = struct {
     batch_stencil: ?*prism.hal.Resource = null,
     batch_draws: u32 = 0,
 
-    const PoolVb = struct { res: *prism.hal.Resource, map: []u8, cap: usize };
+    const PoolVb = struct { res: *prism.hal.Resource, map: []u8, cap: usize, cache_id: u64 = 0 };
+    const FrameProfile = struct {
+        enabled: ?bool = null,
+        since: u64 = 0,
+        frames: u64 = 0,
+        submits: u64 = 0,
+        submit_ns: u64 = 0,
+        swap_ns: u64 = 0,
+        last_present: u64 = 0,
+        intervals_us: [1024]u32 = undefined,
+        interval_count: usize = 0,
+        longest_us: u64 = 0,
+
+        fn active(self: *FrameProfile) bool {
+            if (self.enabled) |on| return on;
+            const on = if (comptime builtin.os.tag == .linux and builtin.link_libc and !builtin.is_test)
+                std.c.getenv("PRISM_MALI_PROFILE") != null
+            else
+                false;
+            self.enabled = on;
+            if (on) self.since = now();
+            return on;
+        }
+
+        fn now() u64 {
+            if (comptime builtin.os.tag != .linux) return 0;
+            var ts: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        }
+
+        fn frame(self: *FrameProfile, started: u64, cache: *VertexCache) void {
+            const ended = now();
+            if (self.last_present != 0) {
+                const interval = (ended - self.last_present) / 1000;
+                self.longest_us = @max(self.longest_us, interval);
+                if (self.interval_count < self.intervals_us.len) {
+                    self.intervals_us[self.interval_count] = @intCast(@min(interval, std.math.maxInt(u32)));
+                    self.interval_count += 1;
+                }
+            }
+            self.last_present = ended;
+            self.frames += 1;
+            self.swap_ns += ended - started;
+            if (ended - self.since < 5_000_000_000) return;
+            const frames: f64 = @floatFromInt(self.frames);
+            std.debug.print("[prism-egl] {d:.1} fps, submit {d:.2} ms/frame ({d:.1}/frame), swap {d:.2} ms/frame (includes final submit), vertex cache {d}/{d} hits\n", .{
+                frames * 1_000_000_000 / @as(f64, @floatFromInt(ended - self.since)),
+                @as(f64, @floatFromInt(self.submit_ns)) / frames / 1_000_000,
+                @as(f64, @floatFromInt(self.submits)) / frames,
+                @as(f64, @floatFromInt(self.swap_ns)) / frames / 1_000_000,
+                cache.hits,
+                cache.hits +% cache.misses,
+            });
+            if (self.interval_count > 0) {
+                const intervals = self.intervals_us[0..self.interval_count];
+                std.sort.heap(u32, intervals, {}, std.sort.asc(u32));
+                std.debug.print("[prism-egl] frame intervals p95 {d:.2}, p99 {d:.2}, max {d:.2} ms\n", .{
+                    @as(f64, @floatFromInt(intervals[(intervals.len - 1) * 95 / 100])) / 1000,
+                    @as(f64, @floatFromInt(intervals[(intervals.len - 1) * 99 / 100])) / 1000,
+                    @as(f64, @floatFromInt(self.longest_us)) / 1000,
+                });
+            }
+            cache.hits = 0;
+            cache.misses = 0;
+            self.* = .{ .enabled = true, .since = ended, .last_present = ended };
+        }
+    };
     /// Max draws in one open batch before an automatic flush. Bounds pool and command-buffer
     /// growth for a never-flushing loop. Well above a normal frame's draw count.
     const BATCH_DRAW_CAP: u32 = 1024;
@@ -280,10 +486,25 @@ pub const Context = struct {
         // A context torn down mid-batch: drop the open command buffer (its draws were never needed).
         if (self.batch_cb) |cb| cb.deinit();
         const dev = self.display.device.?;
+        if (self.incomplete_texture_2d) |texture| dev.destroyResource(texture);
         for (self.vb_pool.items) |p| dev.destroyResource(p.res);
         self.vb_pool.deinit(gpa);
+        self.vertex_staging.deinit(gpa);
+        self.vertex_cache.deinit();
         self.hal.deinit();
         gpa.destroy(self);
+    }
+
+    /// A missing 2D texture samples opaque black. Keep a real descriptor for
+    /// if-converted shaders whose untaken branch references an unbound sampler.
+    pub fn incompleteTexture2D(self: *Context) prism.Error!*prism.hal.Resource {
+        if (self.incomplete_texture_2d) |texture| return texture;
+        const dev = self.display.device.?;
+        const texture = try dev.createResource(.{ .image = .{ .width = 1, .height = 1, .format = .rgba8_unorm, .usage = .{ .sampled = true } } });
+        errdefer dev.destroyResource(texture);
+        @memcpy((try dev.mapResource(texture))[0..4], &[_]u8{ 0, 0, 0, 255 });
+        self.incomplete_texture_2d = texture;
+        return texture;
     }
 
     /// Whether draw batching is active this session. On by default. `PRISM_NOBATCH` disables it
@@ -306,7 +527,7 @@ pub const Context = struct {
     /// needed. Returns the Resource + its full mapping (caller writes the first `size`).
     /// Advances `vb_used`. In non-batched mode vb_used resets each submit and reuses pool[0].
     /// In batched mode successive draws take pool[0], pool[1], ...
-    pub fn checkoutVertexBuffer(self: *Context, size: usize) prism.Error!PoolVb {
+    pub fn checkoutVertexBuffer(self: *Context, size: usize) prism.Error!*PoolVb {
         const dev = self.display.device.?;
         // No batch open => the previous batch (if any) has flushed + fenced, so every pooled buffer
         // is free to reuse: reclaim them all. In non-batched mode batch_cb is always null, so this
@@ -317,19 +538,19 @@ pub const Context = struct {
             const p = &self.vb_pool.items[self.vb_used];
             if (p.cap >= size) {
                 self.vb_used += 1;
-                return p.*;
+                return p;
             }
             // Grow this slot: free the too-small buffer and replace it in place.
             dev.destroyResource(p.res);
             const grown = try allocPoolVb(dev, size);
             p.* = grown;
             self.vb_used += 1;
-            return grown;
+            return p;
         }
         const fresh = try allocPoolVb(dev, size);
         try self.vb_pool.append(gpa, fresh);
         self.vb_used += 1;
-        return fresh;
+        return &self.vb_pool.items[self.vb_used - 1];
     }
 
     fn allocPoolVb(dev: prism.hal.Device, size: usize) prism.Error!PoolVb {
@@ -348,6 +569,12 @@ pub const Context = struct {
     /// buffers are reclaimed lazily by the next checkoutVertexBuffer (batch_cb is null after).
     pub fn flushDraws(self: *Context) prism.Error!void {
         const cb = self.batch_cb orelse return;
+        const profiling = self.frame_profile.active();
+        const started = if (profiling) FrameProfile.now() else 0;
+        defer if (profiling) {
+            self.frame_profile.submits += 1;
+            self.frame_profile.submit_ns += FrameProfile.now() - started;
+        };
         self.batch_cb = null;
         self.batch_target = null;
         self.batch_depth = null;
@@ -372,6 +599,31 @@ pub const Context = struct {
     /// (an FBO bound) routes its clear here with the FBO's color image. `scissor` clips the
     /// clear to a sub-rect when non-null (GL glClear honors an enabled scissor test).
     pub fn clearTarget(self: *Context, target: *prism.hal.Resource, color: prism.hal.Color, scissor: ?prism.hal.ScissorRect) prism.Error!void {
+        // A second full color clear supersedes a queued color-only clear of
+        // the same attachment. There is no geometry or other attachment state
+        // to preserve, so submitting the old clear would only waste a pass.
+        if (scissor == null and self.batch_target == target and self.batch_draws == 0 and self.batch_depth == null and self.batch_stencil == null) {
+            if (self.batch_cb) |cb| {
+                cb.deinit();
+                self.batch_cb = null;
+                self.batch_target = null;
+            }
+        }
+        try self.flushDraws();
+        if (Context.batchingEnabled() and scissor == null) {
+            const cb = try self.hal.beginCommands();
+            errdefer cb.deinit();
+            try cb.setRenderTarget(target);
+            try cb.clear(color);
+            self.batch_cb = cb;
+            self.batch_target = target;
+            self.batch_depth = null;
+            self.batch_stencil = null;
+            self.batch_draws = 0;
+            // The previous batch fenced before this clear opened a new one.
+            self.vb_used = 0;
+            return;
+        }
         const cb = try self.hal.beginCommands();
         defer cb.deinit();
         try cb.setRenderTarget(target);
@@ -386,6 +638,7 @@ pub const Context = struct {
     /// nvidia render pass has a valid surface (CLEAR_SURFACE Z clear runs even with no draw).
     /// Software ignores the unused RT.
     pub fn clearDepthTarget(self: *Context, color: *prism.hal.Resource, depth: *prism.hal.Resource, value: f32) prism.Error!void {
+        try self.flushDraws();
         const cb = try self.hal.beginCommands();
         defer cb.deinit();
         try cb.setRenderTarget(color);
@@ -470,9 +723,25 @@ pub const Context = struct {
         // applies that clear only at the front). Otherwise flush first, then start fresh.
         if (Context.batchingEnabled() and extra_color_targets.len == 0) {
             if (self.batch_cb != null) {
-                const can_join = self.batch_target == target and self.batch_depth == depth and
-                    self.batch_stencil == stencil and clear == null and depth_clear == null and stencil_clear == null;
+                const only_clear = self.batch_draws == 0;
+                const can_join = self.batch_target == target and clear == null and
+                    (only_clear or (self.batch_depth == depth and self.batch_stencil == stencil and
+                        (depth_clear == null or self.device().caps().inline_depth_clear) and stencil_clear == null));
+                if (!can_join and self.frame_profile.active() and self.frame_profile.frames == 3)
+                    std.debug.print("[prism-egl] split after {d} draws: color={} depth={} stencil={} color_clear={} depth_clear={} stencil_clear={}\n", .{
+                        self.batch_draws,
+                        self.batch_target != target,
+                        self.batch_depth != depth,
+                        self.batch_stencil != stencil,
+                        clear != null,
+                        depth_clear != null,
+                        stencil_clear != null,
+                    });
                 if (!can_join) try self.flushDraws();
+                if (can_join and only_clear) {
+                    self.batch_depth = depth;
+                    self.batch_stencil = stencil;
+                }
             }
             if (self.batch_cb == null) {
                 self.batch_cb = try self.hal.beginCommands();
@@ -491,6 +760,8 @@ pub const Context = struct {
             return; // deferred: submitted at the next flushDraws
         }
         // Non-batched: record one draw and submit immediately (fences per draw).
+        // MRT must observe a queued clear before this immediate submission.
+        try self.flushDraws();
         const cb = try self.hal.beginCommands();
         defer cb.deinit();
         try recordDrawInto(cb, target, pipeline, vertex_buffer, first_vertex, vertex_count, instance_count, first_instance, clear, vs_uniform_buffer, fs_uniform_buffer, depth, depth_clear, stencil, stencil_clear, textures, scissor, viewport, extra_color_targets);
@@ -683,6 +954,8 @@ pub const Surface = struct {
     /// on the app's wl_display, attached to the app's wl_surface on swap. Created
     /// lazily on the first present (and re-created on a window resize).
     wl_present: ?*wlw.WaylandPresent = null,
+    wl_dma: ?*DmaPresent = null,
+    wl_dma_attempted: bool = false,
     /// Native X11 window bridge. Owns Prism's private x11.zig connection and
     /// platform surface, never the application's XID.
     x11_window: ?*X11ForeignWindow = null,
@@ -690,6 +963,9 @@ pub const Surface = struct {
     pub fn deinit(self: *Surface) void {
         unregisterSurface(self);
         const dev = self.display.device.?;
+        if (comptime prism.platform.wayland_enabled) {
+            if (self.wl_dma) |present| present.deinit(self.backbuffer);
+        }
         if (self.wl_present) |wp| wp.deinit();
         if (self.hal_surface) |hs| dev.destroySurface(hs);
         if (self.x11_window) |xw| {
@@ -957,6 +1233,9 @@ pub fn createWaylandWindowSurface(
 /// swap is a no-op (offscreen). A wl_egl_window swap presents via the system
 /// libwayland (wl_shm on the app's wl_display). Returns the EGL contract success.
 pub fn swapBuffers(ctx: *Context, surface: *Surface) prism.Error!void {
+    const profiling = ctx.frame_profile.active();
+    const started = if (profiling) Context.FrameProfile.now() else 0;
+    defer if (profiling) ctx.frame_profile.frame(started, &ctx.vertex_cache);
     // Submit any batched draws before the frame is resolved / presented / read back.
     try ctx.flushDraws();
     // MSAA: resolve the multisampled render target into the single-sample backbuffer that is
@@ -996,6 +1275,11 @@ fn resizeRenderTargets(surface: *Surface, width: u32, height: u32) prism.Error!v
     else
         null;
 
+    if (comptime prism.platform.wayland_enabled) {
+        if (surface.wl_dma) |present| present.deinit(surface.backbuffer);
+    }
+    surface.wl_dma = null;
+    surface.wl_dma_attempted = false;
     dev.destroyResource(surface.backbuffer);
     if (surface.depth_buffer) |db| dev.destroyResource(db);
     if (surface.stencil_buffer) |sb| dev.destroyResource(sb);
@@ -1027,6 +1311,23 @@ fn swapWaylandWindow(ctx: *Context, surface: *Surface) prism.Error!void {
         surface.width = parsed.width;
         surface.height = parsed.height;
         return; // this frame was rendered at the old size. the app re-renders
+    }
+
+    if (comptime prism.platform.wayland_enabled) {
+        if (!surface.wl_dma_attempted and std.c.getenv("PRISM_DUMP") == null) {
+            surface.wl_dma_attempted = true;
+            surface.wl_dma = DmaPresent.init(gpa, ctx.device(), app_display, parsed.surface, surface.backbuffer, surface.width, surface.height) catch |err| fallback: {
+                if (std.c.getenv("PRISM_GLES_DEBUG") != null)
+                    std.debug.print("[prism-egl] dma-buf present unavailable: {s}; using SHM\n", .{@errorName(err)});
+                break :fallback null;
+            };
+            if (surface.wl_dma != null and std.c.getenv("PRISM_GLES_DEBUG") != null)
+                std.debug.print("[prism-egl] dma-buf present active: {d}x{d}, 3 buffers\n", .{ surface.width, surface.height });
+        }
+        if (surface.wl_dma) |present| {
+            surface.backbuffer = present.presentAndAcquire() catch return error.DeviceLost;
+            return;
+        }
     }
 
     // Lazily create the wl_shm swapchain on the app's display + wl_surface.

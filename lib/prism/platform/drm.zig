@@ -87,7 +87,7 @@ const FrameBuffer = struct {
 // Route a failing open's errno through the display logger. Default-silent: an
 // unset `log` emits nothing, so tests and graceful-fail paths produce no output.
 fn dbg(logger: prism_log.Logger, comptime what: []const u8, e: std.posix.E) void {
-    logger.log("{s} errno={d}", .{ what, @intFromEnum(e) });
+    logger.log("{s} errno={d}", .{ what, @backingInt(e) });
 }
 
 // Log a note when a node operation failed. The typed drm.Node methods map errno

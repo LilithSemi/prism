@@ -469,7 +469,7 @@ fn isDiscardFnParam(func: *const front.Function, value: ir.function.Value) bool 
 fn fsWritesFragDepth(func: *const front.Function) bool {
     var bi: usize = 0;
     while (bi < func.blockCount()) : (bi += 1) {
-        for (func.blockInsts(@enumFromInt(bi))) |inst| {
+        for (func.blockInsts(@fromBackingInt(@intCast(bi)))) |inst| {
             if (func.opcode(inst) == .store) {
                 const st = func.opcode(inst).store;
                 if (readOutTag(func, st.ptr)) |tag| if (tag == .frag_depth) return true;
@@ -515,7 +515,7 @@ fn slotToIndex(stage: GfxStage, tag: OutTag) ?usize {
 /// graphics shader (what a flat passthrough/channel-rotate VS/FS lowers to).
 pub fn rewriteGraphics(func: *front.Function) !GfxInfo {
     const stage = readStage(func) orelse return error.NotGraphics;
-    const entry: ir.function.Block = @enumFromInt(0);
+    const entry: ir.function.Block = @fromBackingInt(@intCast(0));
 
     // Partition the entry block's current params (before we append the output ptr):
     // vulcan emits the f32 input scalars first, then one pointer param per uniform /
@@ -600,7 +600,7 @@ pub fn rewriteGraphics(func: *front.Function) !GfxInfo {
     // the literal slot address faults: a FS color_out=0 store writes to address 0.)
     var nblock: usize = 0;
     while (nblock < func.blockCount()) : (nblock += 1) {
-        const block: ir.function.Block = @enumFromInt(nblock);
+        const block: ir.function.Block = @fromBackingInt(@intCast(nblock));
         const orig_insts = func.blockInsts(block);
 
         // Snapshot the list (createInst/setBlockInsts may realloc the block's list).
@@ -672,7 +672,7 @@ fn traceTexCoordSlots(func: *const front.Function, entry: ir.function.Block) [2]
     // Scan every block for the sampler_fn call_indirect. Read args {desc, u, v, out}.
     var nb: usize = 0;
     while (nb < func.blockCount()) : (nb += 1) {
-        const block: ir.function.Block = @enumFromInt(nb);
+        const block: ir.function.Block = @fromBackingInt(@intCast(nb));
         for (func.blockInsts(block)) |inst| {
             const op = func.opcode(inst);
             if (op != .call_indirect) continue;
@@ -693,7 +693,7 @@ fn traceTexCoordSlots(func: *const front.Function, entry: ir.function.Block) [2]
 fn prepareQuadSampling(func: *front.Function) !void {
     const f32_ty = try func.types.intern(.{ .float = .f32 });
     for (0..func.blockCount()) |bi| {
-        const block: ir.function.Block = @enumFromInt(bi);
+        const block: ir.function.Block = @fromBackingInt(@intCast(bi));
         const snapshot = try func.allocator.dupe(ir.function.Inst, func.blockInsts(block));
         defer func.allocator.free(snapshot);
         var rewritten: std.ArrayListUnmanaged(ir.function.Inst) = .empty;
@@ -757,7 +757,7 @@ pub const quad_out_len: usize = 16;
 pub fn rewriteGraphicsQuad(func: *front.Function) !GfxInfo {
     const stage = readStage(func) orelse return error.NotGraphics;
     if (stage != .fragment) return error.NotGraphics;
-    const entry: ir.function.Block = @enumFromInt(0);
+    const entry: ir.function.Block = @fromBackingInt(@intCast(0));
 
     // Capture the input + buffer-param layout before widening. Widening retypes f32 -> vector
     // (each input becomes a Quad) and rewrites the body, but does not reorder/add/remove the

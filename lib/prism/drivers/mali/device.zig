@@ -23,8 +23,9 @@ pub fn merr(err: anyerror) hal.Error {
 pub const Device = struct {
     gpa: std.mem.Allocator,
     session: mali.Session,
+    pipeline_creations: u64 = 0,
 
-    const formats = [_]hal.Format{.rgba8_unorm};
+    const formats = [_]hal.Format{ .rgba8_unorm, .depth32_float };
 
     pub fn create(gpa: std.mem.Allocator) hal.Error!hal.Device {
         const self = gpa.create(Device) catch return error.OutOfMemory;
@@ -53,6 +54,7 @@ pub const Device = struct {
             .graphics = true,
             .present = true,
             .max_texture_dim = std.math.maxInt(u16),
+            .inline_depth_clear = true,
         };
     }
 
@@ -79,7 +81,7 @@ pub const Device = struct {
             },
             .image => |image| {
                 if (image.width == 0 or image.height == 0 or image.width > std.math.maxInt(u16) or
-                    image.height > std.math.maxInt(u16) or image.format != .rgba8_unorm or
+                    image.height > std.math.maxInt(u16) or (image.format != .rgba8_unorm and image.format != .depth32_float) or
                     image.samples != 1 or image.mip_levels != 1 or image.cube or image.depth != 1 or image.array)
                     return error.Unsupported;
                 const packed_row = std.math.mul(u32, image.width, 4) catch return error.InvalidArgument;
@@ -189,6 +191,7 @@ pub const Device = struct {
         const pipeline = self.gpa.create(Pipeline) catch return error.OutOfMemory;
         errdefer self.gpa.destroy(pipeline);
         pipeline.* = try Pipeline.create(&self.session, self.gpa, desc);
+        self.pipeline_creations += 1;
         return @ptrCast(pipeline);
     }
 

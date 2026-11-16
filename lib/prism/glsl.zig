@@ -11,13 +11,175 @@ pub const Error = glsl.SpirvError;
 /// The pipeline stage a GLSL shader compiles for. Re-exported from Vulcan. Mapped from
 /// the HAL `ShaderStage` by `compileToSpirv`.
 pub const Stage = glsl.Stage;
+pub const UniformScalarType = enum { float, int, uint, bool };
 
 /// Compile GLSL ES 1.00 source for `stage` to a SPIR-V binary (a `[]u32` word stream).
 /// Caller owns the result (free it). The stage resolves GLSL ES 1.00 `varying` (an
 /// `out` in a vertex shader, an `in` in a fragment shader) and the implicit
 /// `gl_FragColor` color output.
 pub fn compileShaderToSpirv(allocator: std.mem.Allocator, source: []const u8, stage: Stage) Error![]u32 {
-    return glsl.compileShaderToSpirv(allocator, source, stage);
+    const normalized = try normalizeSource(allocator, source);
+    defer allocator.free(normalized);
+    var compiled = try glsl.compileShaderWithLayout(allocator, normalized, stage);
+    defer compiled.deinit(allocator);
+    return nameInterface(allocator, compiled.spirv, compiled.attributes, compiled.outputs);
+}
+
+// SPIR-V locations are assigned independently in each GLSL stage. Retain
+// source names as standard OpName debug instructions so native pipeline
+// linkers can match varyings when the FS declares a subset or different order.
+fn nameInterface(allocator: std.mem.Allocator, words: []const u32, inputs: anytype, outputs: anytype) std.mem.Allocator.Error![]u32 {
+    const locations = try allocator.alloc(?u32, words[3]);
+    defer allocator.free(locations);
+    @memset(locations, null);
+    const storage = try allocator.alloc(u32, words[3]);
+    defer allocator.free(storage);
+    @memset(storage, 0);
+    var cursor: usize = 5;
+    var insertion: usize = words.len;
+    while (cursor < words.len) {
+        const opcode = words[cursor] & 0xffff;
+        const count = words[cursor] >> 16;
+        if (insertion == words.len and (opcode == 71 or opcode == 72 or (opcode >= 19 and opcode <= 39))) insertion = cursor;
+        if (opcode == 71 and count == 4 and words[cursor + 2] == 30) locations[words[cursor + 1]] = words[cursor + 3];
+        if (opcode == 59 and count >= 4) storage[words[cursor + 2]] = words[cursor + 3];
+        cursor += count;
+    }
+    var result: std.ArrayList(u32) = .empty;
+    errdefer result.deinit(allocator);
+    try result.appendSlice(allocator, words[0..insertion]);
+    inline for (.{ inputs, outputs }, .{ @as(u32, 1), @as(u32, 3) }) |members, kind| {
+        for (members) |member| {
+            if (member.name.len == 0) continue;
+            for (locations, storage, 0..) |location, variable_kind, id| {
+                if (location != member.location or variable_kind != kind) continue;
+                const name_words = (member.name.len + 4) / 4;
+                const start = result.items.len;
+                try result.resize(allocator, start + name_words + 2);
+                result.items[start] = (@as(u32, @intCast(name_words + 2)) << 16) | 5;
+                result.items[start + 1] = @intCast(id);
+                @memset(result.items[start + 2 ..], 0);
+                @memcpy(std.mem.sliceAsBytes(result.items[start + 2 ..])[0..member.name.len], member.name);
+            }
+        }
+    }
+    try result.appendSlice(allocator, words[insertion..]);
+    return result.toOwnedSlice(allocator);
+}
+
+/// The pinned compiler supports scalar comparisons but not the bool constructor.
+/// Lower bool(x) to ((x) != 0), evaluating x once and retaining source newlines.
+/// Precision qualifiers are advisory in Prism's f32 shader ABI. Remove them
+/// before parsing, including local qualifiers the pinned parser does not accept.
+/// Do this at Prism's GLSL entry points so all drivers receive identical SPIR-V.
+fn normalizeSource(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]u8 {
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(allocator);
+    var constructors: std.ArrayList(usize) = .empty;
+    defer constructors.deinit(allocator);
+    var depth: usize = 0;
+    var cursor: usize = 0;
+    var copied: usize = 0;
+    var braces: usize = 0;
+    var in_function = false;
+    var previous: []const u8 = "";
+    while (sourceToken(source, &cursor)) |token| {
+        // The pinned parser accepts compound bodies of if/for statements,
+        // but not a standalone compound statement. An always-taken if keeps
+        // the block's scope and execution semantics, including local names.
+        if (std.mem.eql(u8, token.text, "{")) {
+            if (braces == 0 and std.mem.eql(u8, previous, ")")) in_function = true;
+            if (in_function and braces != 0 and
+                (std.mem.eql(u8, previous, ";") or std.mem.eql(u8, previous, "{") or std.mem.eql(u8, previous, "}")))
+            {
+                try result.appendSlice(allocator, source[copied..token.start]);
+                try result.appendSlice(allocator, "if (true) ");
+                copied = token.start;
+            }
+            braces += 1;
+        } else if (std.mem.eql(u8, token.text, "}")) {
+            braces -|= 1;
+            if (braces == 0) in_function = false;
+        }
+        if (std.mem.eql(u8, token.text, "highp") or std.mem.eql(u8, token.text, "mediump") or std.mem.eql(u8, token.text, "lowp")) {
+            try result.appendSlice(allocator, source[copied..token.start]);
+            copied = token.end;
+        } else if (std.mem.eql(u8, token.text, "bool")) {
+            var lookahead = cursor;
+            if (sourceToken(source, &lookahead)) |next| {
+                if (std.mem.eql(u8, next.text, "(")) {
+                    try result.appendSlice(allocator, source[copied..token.start]);
+                    try result.append(allocator, '(');
+                    copied = token.end;
+                    try constructors.append(allocator, depth + 1);
+                }
+            }
+        } else if (std.mem.eql(u8, token.text, "(")) {
+            depth += 1;
+        } else if (std.mem.eql(u8, token.text, ")")) {
+            if (constructors.items.len != 0 and constructors.items[constructors.items.len - 1] == depth) {
+                try result.appendSlice(allocator, source[copied..token.end]);
+                try result.appendSlice(allocator, " != 0)");
+                copied = token.end;
+                constructors.items.len -= 1;
+            }
+            depth -|= 1;
+        }
+        previous = token.text;
+    }
+    try result.appendSlice(allocator, source[copied..]);
+    return result.toOwnedSlice(allocator);
+}
+
+const SourceToken = struct { text: []const u8, start: usize, end: usize };
+
+// Default-block storage is scalarized to f32 by the compiler. Retain the
+// source-level type separately for glGetActiveUniform: applications use it to
+// choose the appropriate glUniform* setter, even though the HAL ABI is f32.
+fn declaredUniformScalarType(source: []const u8, name: []const u8) UniformScalarType {
+    var cursor: usize = 0;
+    while (sourceToken(source, &cursor)) |token| {
+        if (!std.mem.eql(u8, token.text, "uniform")) continue;
+        var ty = sourceToken(source, &cursor) orelse break;
+        if (std.mem.eql(u8, ty.text, "lowp") or std.mem.eql(u8, ty.text, "mediump") or std.mem.eql(u8, ty.text, "highp"))
+            ty = sourceToken(source, &cursor) orelse break;
+        const scalar: UniformScalarType = if (std.mem.eql(u8, ty.text, "int") or std.mem.startsWith(u8, ty.text, "ivec")) .int else if (std.mem.eql(u8, ty.text, "uint") or std.mem.startsWith(u8, ty.text, "uvec")) .uint else if (std.mem.eql(u8, ty.text, "bool") or std.mem.startsWith(u8, ty.text, "bvec")) .bool else .float;
+        while (sourceToken(source, &cursor)) |decl| {
+            if (std.mem.eql(u8, decl.text, ";") or std.mem.eql(u8, decl.text, "{")) break;
+            if (std.mem.eql(u8, decl.text, name)) return scalar;
+        }
+    }
+    return .float;
+}
+
+fn sourceToken(source: []const u8, cursor: *usize) ?SourceToken {
+    while (cursor.* < source.len) {
+        const start = cursor.*;
+        if (std.ascii.isWhitespace(source[start])) {
+            cursor.* += 1;
+        } else if (std.mem.startsWith(u8, source[start..], "//")) {
+            while (cursor.* < source.len and source[cursor.*] != '\n') cursor.* += 1;
+        } else if (std.mem.startsWith(u8, source[start..], "/*")) {
+            cursor.* += 2;
+            while (cursor.* < source.len and !std.mem.startsWith(u8, source[cursor.*..], "*/")) cursor.* += 1;
+            cursor.* = @min(source.len, cursor.* + 2);
+        } else if (source[start] == '"') {
+            cursor.* += 1;
+            while (cursor.* < source.len) {
+                const ch = source[cursor.*];
+                cursor.* += 1;
+                if (ch == '"') break;
+                if (ch == '\\' and cursor.* < source.len) cursor.* += 1;
+            }
+        } else {
+            cursor.* += 1;
+            if (std.ascii.isAlphanumeric(source[start]) or source[start] == '_') {
+                while (cursor.* < source.len and (std.ascii.isAlphanumeric(source[cursor.*]) or source[cursor.*] == '_')) cursor.* += 1;
+            }
+            return .{ .text = source[start..cursor.*], .start = start, .end = cursor.* };
+        }
+    }
+    return null;
 }
 
 /// Compile GLSL ES source for a HAL `ShaderStage` (the EGL/GLES caller's stage type)
@@ -40,6 +202,7 @@ pub fn compileForStage(allocator: std.mem.Allocator, source: []const u8, stage: 
 /// block, and float count. Re-exported from Vulcan's lowering so the GLES layer can resolve
 /// glGetUniformLocation + write glUniform* bytes at the matching offset.
 pub const UniformMember = struct {
+    scalar_type: UniformScalarType = .float,
     name: []const u8,
     /// Byte offset of this uniform within the default uniform block (tight-packed std140
     /// for the all-vec4/mat4 case es2gears uses).
@@ -156,7 +319,15 @@ pub fn compileForStageWithLayout(allocator: std.mem.Allocator, source: []const u
         .fragment => .fragment,
         .compute => .compute,
     };
-    var c = try glsl.compileShaderWithLayout(allocator, source, vk_stage);
+    const normalized = try normalizeSource(allocator, source);
+    defer allocator.free(normalized);
+    var c = try glsl.compileShaderWithLayout(allocator, normalized, vk_stage);
+    const named = nameInterface(allocator, c.spirv, c.attributes, c.outputs) catch |err| {
+        c.deinit(allocator);
+        return err;
+    };
+    allocator.free(c.spirv);
+    c.spirv = named;
     // Transfer the SPIR-V words into a byte buffer. Transfer the uniform names verbatim.
     const bytes = allocator.alloc(u8, c.spirv.len * 4) catch |e| {
         c.deinit(allocator);
@@ -172,7 +343,7 @@ pub fn compileForStageWithLayout(allocator: std.mem.Allocator, source: []const u
         return e;
     };
     for (c.uniforms, 0..) |u, i| {
-        members[i] = .{ .name = u.name, .offset = u.offset_floats * 4, .float_count = u.float_count, .mat_dim = u.mat_dim, .array_len = u.array_len };
+        members[i] = .{ .name = u.name, .offset = u.offset_floats * 4, .float_count = u.float_count, .mat_dim = u.mat_dim, .array_len = u.array_len, .scalar_type = declaredUniformScalarType(source, u.name) };
     }
     // Transfer the sampler members (name -> binding). Names transferred verbatim.
     const samplers = allocator.alloc(SamplerMember, c.samplers.len) catch |e| {
@@ -327,4 +498,73 @@ test "glsl: a malformed shader surfaces a compile error (no crash)" {
     try std.testing.expectError(error.ParseError, compileForStage(gpa, "void main( { ", .fragment));
     // No main() is a defined failure too.
     try std.testing.expectError(error.MissingMain, compileForStage(gpa, "float x;", .vertex));
+}
+
+test "GLSL scalar bool constructors lower without touching comments or declarations" {
+    const allocator = std.testing.allocator;
+    const input = "bool flag; // bool(fake)\nif (bool /* keep */ (bool(x + f(2)))) flag = true;";
+    const lowered = try normalizeSource(allocator, input);
+    defer allocator.free(lowered);
+    try std.testing.expectEqualStrings("bool flag; // bool(fake)\nif (( /* keep */ (((x + f(2)) != 0)) != 0)) flag = true;", lowered);
+}
+
+test "GLSL Luanti texture-enable condition compiles through both entry points" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\precision mediump float;
+        \\uniform int enabled;
+        \\uniform sampler2D image;
+        \\varying vec2 uv;
+        \\varying vec4 color;
+        \\void main() {
+        \\    vec4 result = color;
+        \\    if (bool(enabled)) result *= texture2D(image, uv);
+        \\    gl_FragColor = result;
+        \\}
+    ;
+    const words = try compileShaderToSpirv(allocator, source, .fragment);
+    defer allocator.free(words);
+    var compiled = try compileForStageWithLayout(allocator, source, .fragment);
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), compiled.uniforms.len);
+    try std.testing.expectEqualStrings("enabled", compiled.uniforms[0].name);
+    try std.testing.expectEqual(UniformScalarType.int, compiled.uniforms[0].scalar_type);
+    try std.testing.expectEqual(@as(usize, 1), compiled.samplers.len);
+}
+
+test "GLSL precision-qualified locals used by Luanti postprocessing compile" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\precision mediump float;
+        \\highp vec3 dither(highp vec2 position) {
+        \\    highp vec3 noise = vec3(dot(position, vec2(171.0, 231.0)));
+        \\    return fract(noise / vec3(103.0, 71.0, 97.0));
+        \\}
+        \\void main() { gl_FragColor = vec4(dither(gl_FragCoord.xy), 1.0); }
+    ;
+    const words = try compileShaderToSpirv(allocator, source, .fragment);
+    defer allocator.free(words);
+    try std.testing.expect(words.len > 5);
+}
+
+test "GLSL postprocessing compound statements retain their lexical scopes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\precision mediump float;
+        \\uniform float exposure;
+        \\uniform sampler2D rendered;
+        \\varying vec2 uv;
+        \\void main() {
+        \\    vec4 color = texture2D(rendered, uv);
+        \\    { color.rgb *= exposure; }
+        \\    { float scale = 0.5; color.rgb *= scale; }
+        \\    { float scale = 0.75; color.rgb *= scale; }
+        \\    gl_FragColor = color;
+        \\}
+    ;
+    const words = try compileShaderToSpirv(allocator, source, .fragment);
+    defer allocator.free(words);
+    var compiled = try compileForStageWithLayout(allocator, source, .fragment);
+    defer compiled.deinit(allocator);
+    try std.testing.expect(words.len > 5);
 }

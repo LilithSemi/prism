@@ -78,6 +78,28 @@ __GLX_VENDOR_LIBRARY_NAME=prism \
   glmark2
 ```
 
+### Luanti
+
+The Nix development shell includes Luanti from nixpkgs with its GLES renderer
+enabled (`nix build .#luanti` builds the same package). Stock desktop builds of
+Luanti may omit that renderer. Select its OpenGL ES renderer with
+`video_driver = ogles2`; its default desktop OpenGL renderer requires a newer
+API than Prism advertises. Copy the example configuration before running, since
+Luanti saves settings to its configuration file:
+
+```sh
+cp examples/luanti.conf /tmp/prism-luanti.conf
+__EGL_VENDOR_LIBRARY_FILENAMES="$PRISM_PREFIX/share/glvnd/egl_vendor.d/50_prism.json" \
+  luanti --config /tmp/prism-luanti.conf
+```
+
+On Wayland, add `SDL_VIDEODRIVER=wayland` to use direct DMA-buf presentation
+on Mali when the compositor supports it. Use a `ReleaseFast` build for gameplay.
+For an X11 session, add `SDL_VIDEODRIVER=x11 SDL_VIDEO_X11_FORCE_EGL=1` to the
+command's environment. `PRISM_FORCE_SW=1` selects the software driver for
+diagnostics. Luanti's startup log should identify `OpenGL ES 2.0 Prism` and
+`Renderer: Prism`.
+
 ### Vulkan: diagnostics and a demo
 
 glmark2 and the Mesa EGL demos above use EGL. To exercise Prism's Vulkan ICD,

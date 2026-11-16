@@ -290,6 +290,27 @@ export fn glUniform4f(location: gles.GLint, v0: gles.GLfloat, v1: gles.GLfloat, 
 export fn glUniform1i(location: gles.GLint, v0: gles.GLint) callconv(.c) void {
     return vendor.glUniform1i(location, v0);
 }
+export fn glUniform2i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint) callconv(.c) void {
+    vendor.glUniform2i(location, v0, v1);
+}
+export fn glUniform3i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint, v2: gles.GLint) callconv(.c) void {
+    vendor.glUniform3i(location, v0, v1, v2);
+}
+export fn glUniform4i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint, v2: gles.GLint, v3: gles.GLint) callconv(.c) void {
+    vendor.glUniform4i(location, v0, v1, v2, v3);
+}
+export fn glUniform1iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    vendor.glUniform1iv(location, count, value);
+}
+export fn glUniform2iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    vendor.glUniform2iv(location, count, value);
+}
+export fn glUniform3iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    vendor.glUniform3iv(location, count, value);
+}
+export fn glUniform4iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    vendor.glUniform4iv(location, count, value);
+}
 export fn glUniform1fv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLfloat) callconv(.c) void {
     return vendor.glUniform1fv(location, count, value);
 }

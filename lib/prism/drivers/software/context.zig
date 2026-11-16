@@ -652,7 +652,7 @@ fn execute(cb: *CommandBuffer) void {
                 .max_anisotropy = tb.max_anisotropy,
                 .base_level = tb.base_level,
                 .tex_max_level = tb.max_level,
-                .swizzle = .{ @intFromEnum(tb.swizzle[0]), @intFromEnum(tb.swizzle[1]), @intFromEnum(tb.swizzle[2]), @intFromEnum(tb.swizzle[3]) },
+                .swizzle = .{ @backingInt(tb.swizzle[0]), @backingInt(tb.swizzle[1]), @backingInt(tb.swizzle[2]), @backingInt(tb.swizzle[3]) },
                 .lod = tb.lod_bias, // GL_TEXTURE_LOD_BIAS: sampleTexture adds this to the computed LOD
                 .tex_min_lod = tb.min_lod, // GL_TEXTURE_MIN_LOD / MAX_LOD: clamp the effective LOD
                 .tex_max_lod = tb.max_lod,
@@ -668,7 +668,7 @@ fn execute(cb: *CommandBuffer) void {
                 },
                 // GL_TEXTURE_COMPARE_MODE / _FUNC (sampler2DShadow): depth-compare sampling.
                 .compare_enable = tb.compare_enable,
-                .compare_op = @intFromEnum(tb.compare_op),
+                .compare_op = @backingInt(tb.compare_op),
             };
             // A mip-chained image (mip_levels > 1) is tightly packed level-0-first. Record each
             // level's byte offset so the sampler can fetch any level. Base (0) is at offset 0.

@@ -290,7 +290,7 @@ pub const Transport = struct {
         switch (std.os.linux.errno(rc)) {
             .SUCCESS => {},
             else => |e| {
-                self.log.log("ioctl req=0x{x} errno={d}", .{ request, @intFromEnum(e) });
+                self.log.log("ioctl req=0x{x} errno={d}", .{ request, @backingInt(e) });
                 return error.DeviceLost;
             },
         }
@@ -392,7 +392,7 @@ pub const Transport = struct {
         switch (std.os.linux.errno(rc)) {
             .SUCCESS => {},
             else => |e| {
-                self.log.log("ioctlInit req=0x{x} errno={d}", .{ request, @intFromEnum(e) });
+                self.log.log("ioctlInit req=0x{x} errno={d}", .{ request, @backingInt(e) });
                 return error.InitializationFailed;
             },
         }

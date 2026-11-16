@@ -50,9 +50,22 @@
         );
 
       treefmtEval = forAllSystems ({ pkgs, ... }: treefmt-nix.lib.evalModule pkgs (import ./treefmt.nix));
+      # Upstream disables GLES on desktop by default. Prism's GLES frontend
+      # needs this renderer enabled in Luanti, without changing its game code.
+      luantiFor =
+        pkgs:
+        pkgs.luanti.overrideAttrs (old: {
+          cmakeFlags = old.cmakeFlags ++ [ "-DENABLE_GLES2=ON" ];
+        });
     in
     {
       versionTemplate = "1.1pre-<lastModifiedDate>-<rev>";
+      packages = forAllSystems (
+        { pkgs, ... }:
+        lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          luanti = luantiFor pkgs;
+        }
+      );
 
       devShells = forAllSystems (
         { pkgs, ... }:
@@ -76,6 +89,7 @@
                   xorg-server
                   glmark2
                   mesa-demos
+                  (luantiFor pkgs)
                 ]
               );
           };
@@ -95,7 +109,7 @@
 
             zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
-              hash = "sha256-av70Ur/W9AsgrWpvFn0uh0O5Wh5Sv2Hi2zbzzRyKrHs=";
+              hash = "sha256-iNevlnMAkfkHoZ0MY9b+02glKltnSK4Cdf60276i3SU=";
             };
 
             nativeBuildInputs =

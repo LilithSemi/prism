@@ -715,6 +715,8 @@ pub const DeviceCaps = struct {
     present: bool,
     /// Max 2D texture / render-target edge length in pixels.
     max_texture_dim: u32,
+    /// Ordered full-attachment depth clears can share a command buffer with draws.
+    inline_depth_clear: bool = false,
 
     /// True when any of `formats` is an HDR format. Drivers use this so `hdr`
     /// never disagrees with the advertised format set.

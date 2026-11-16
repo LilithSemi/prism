@@ -404,6 +404,16 @@ pub fn blitRgbaToXrgb(dst: []u8, src: []const u8, width: u32, height: u32) void 
     const px = @as(usize, width) * @as(usize, height);
     const n = @min(@min(dst.len, src.len) / 4, px);
     var i: usize = 0;
+    const Pixels = @Vector(4, u32);
+    while (builtin.cpu.arch.endian() == .little and i + 4 <= n) : (i += 4) {
+        const input: *align(1) const Pixels = @ptrCast(src.ptr + i * 4);
+        const output: *align(1) Pixels = @ptrCast(dst.ptr + i * 4);
+        const rgba = input.*;
+        output.* = (rgba & @as(Pixels, @splat(0x0000_ff00))) |
+            ((rgba & @as(Pixels, @splat(0xff))) << @as(@Vector(4, u5), @splat(16))) |
+            ((rgba >> @as(@Vector(4, u5), @splat(16))) & @as(Pixels, @splat(0xff))) |
+            @as(Pixels, @splat(0xff00_0000));
+    }
     while (i < n) : (i += 1) {
         const s = i * 4;
         const r = src[s + 0];
@@ -504,6 +514,22 @@ test "parse handles the legacy surface-first layout" {
     try std.testing.expectEqual(@as(u32, 320), p.width);
     try std.testing.expectEqual(@as(u32, 240), p.height);
     try std.testing.expectEqual(@as(*wl_surface, @ptrCast(&fake_surface)), p.surface);
+}
+
+test "blitRgbaToXrgb handles vector blocks and unaligned partial rows" {
+    var src: [29]u8 = @splat(0);
+    var dst: [31]u8 = @splat(77);
+    for (0..7) |pixel| {
+        const offset = 1 + pixel * 4;
+        src[offset..][0..4].* = .{ @intCast(pixel), @intCast(pixel + 10), @intCast(pixel + 20), 0 };
+    }
+    blitRgbaToXrgb(dst[2..30], src[1..29], 7, 1);
+    try std.testing.expectEqualSlices(u8, &.{ 77, 77 }, dst[0..2]);
+    try std.testing.expectEqual(@as(u8, 77), dst[30]);
+    for (0..7) |pixel| {
+        const expected = [_]u8{ @intCast(pixel + 20), @intCast(pixel + 10), @intCast(pixel), 255 };
+        try std.testing.expectEqualSlices(u8, &expected, dst[2 + pixel * 4 ..][0..4]);
+    }
 }
 
 test "blitRgbaToXrgb swaps R and B channels" {

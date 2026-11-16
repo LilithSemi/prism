@@ -13,6 +13,8 @@ extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 fn debugEnabled() bool {
     return getenv("PRISM_GLES_DEBUG") != null;
 }
+threadlocal var pipeline_diagnostics: u32 = 0;
+threadlocal var pipeline_diagnostic_programs: [16]GLuint = @splat(0);
 
 // --- GL C-ABI scalar types (GL/gl.h, GLES2/gl2.h) --------------------------
 
@@ -2225,6 +2227,7 @@ const Program = struct {
     hal_vs: ?*prism.hal.ShaderModule = null,
     hal_fs: ?*prism.hal.ShaderModule = null,
     hal_pipeline: ?*prism.hal.Pipeline = null,
+    pipeline_variants: std.ArrayListUnmanaged(PipelineVariant) = .empty,
     // The y-flip (GL bottom-left origin) is baked into hal_vs and is correct only for the
     // default framebuffer (which is presented top-down). Rendering to an FBO texture that
     // is later sampled must not flip: the flip would store the texture upside-down and
@@ -2359,6 +2362,7 @@ const SamplerUniform = struct {
 /// blocks out independently, so a member shared by both can sit at different offsets in each.
 /// glUniform* writes the value into every stage's buffer at that stage's offset.
 const ProgUniform = struct {
+    scalar_type: prism.glsl.UniformScalarType = .float,
     name: []u8,
     vs_offset: i32 = -1,
     fs_offset: i32 = -1,
@@ -5307,7 +5311,6 @@ pub fn genFramebuffers(n: GLsizei, out: ?[*]GLuint) void {
 }
 
 pub fn bindFramebuffer(target: GLenum, id: GLuint) void {
-    flushBatch(); // pending draws belong to the OLD render target. submit before retargeting
     if (target != GL_FRAMEBUFFER and target != GL_READ_FRAMEBUFFER and target != GL_DRAW_FRAMEBUFFER) {
         setError(GL_INVALID_ENUM);
         return;
@@ -5322,6 +5325,8 @@ pub fn bindFramebuffer(target: GLenum, id: GLuint) void {
             return;
         }
     }
+    if ((target == GL_FRAMEBUFFER or target == GL_DRAW_FRAMEBUFFER) and bound_framebuffer != id)
+        flushBatch(); // Only a draw-target change splits the pending render pass.
     // GL_FRAMEBUFFER binds BOTH the draw and read targets. The split targets bind one each.
     if (target == GL_FRAMEBUFFER or target == GL_DRAW_FRAMEBUFFER) bound_framebuffer = id;
     if (target == GL_FRAMEBUFFER or target == GL_READ_FRAMEBUFFER) bound_read_framebuffer = id;
@@ -6093,7 +6098,7 @@ pub fn compileShader(shader: GLuint) void {
             s.info_log.appendSlice(gpa, "out of memory\x00") catch {};
             return;
         };
-        s.uniforms.append(gpa, .{ .name = owned, .offset = u.offset, .float_count = u.float_count, .mat_dim = u.mat_dim, .array_len = u.array_len }) catch {
+        s.uniforms.append(gpa, .{ .name = owned, .offset = u.offset, .float_count = u.float_count, .mat_dim = u.mat_dim, .array_len = u.array_len, .scalar_type = u.scalar_type }) catch {
             gpa.free(owned);
             s.compiled = false;
             return;
@@ -6518,6 +6523,7 @@ pub fn linkProgram(program: GLuint) void {
                     .vs_offset = if (is_vs) @intCast(u.offset) else -1,
                     .fs_offset = if (is_vs) -1 else @intCast(u.offset),
                     .float_count = u.float_count,
+                    .scalar_type = u.scalar_type,
                     .mat_dim = u.mat_dim,
                     .array_len = u.array_len,
                 }) catch {
@@ -6618,14 +6624,18 @@ pub fn linkProgram(program: GLuint) void {
 
 fn destroyProgramHal(p: *Program) void {
     if (p.hal_dev) |dev| {
-        if (p.hal_pipeline) |pl| dev.destroyPipeline(pl);
-        if (p.hal_pipeline_noflip) |pl| dev.destroyPipeline(pl);
+        for (p.pipeline_variants.items) |variant| {
+            dev.destroyPipeline(variant.pipeline);
+            gpa.free(variant.desc.vertex_layout.attributes);
+        }
         if (p.hal_vs) |m| dev.destroyShaderModule(m);
         if (p.hal_vs_noflip) |m| dev.destroyShaderModule(m);
         if (p.hal_fs) |m| dev.destroyShaderModule(m);
         if (p.vs_uniform_hal) |ub| dev.destroyResource(ub);
         if (p.fs_uniform_hal) |ub| dev.destroyResource(ub);
     }
+    p.pipeline_variants.deinit(gpa);
+    p.pipeline_variants = .empty;
     p.hal_pipeline = null;
     p.hal_pipeline_noflip = null;
     p.hal_vs = null;
@@ -6785,6 +6795,13 @@ fn uniformGlType(u: ProgUniform) GLenum {
     if (u.mat_dim == 2) return GL_FLOAT_MAT2;
     if (u.mat_dim == 3) return GL_FLOAT_MAT3;
     if (u.mat_dim == 4) return GL_FLOAT_MAT4;
+    const n = @min(@max(u.float_count, 1), 4) - 1;
+    switch (u.scalar_type) {
+        .int => return ([_]GLenum{ GL_INT, 0x8B53, 0x8B54, 0x8B55 })[n],
+        .uint => return ([_]GLenum{ GL_UNSIGNED_INT, 0x8DC6, 0x8DC7, 0x8DC8 })[n],
+        .bool => return ([_]GLenum{ 0x8B56, 0x8B57, 0x8B58, 0x8B59 })[n],
+        .float => {},
+    }
     return switch (u.float_count) {
         1 => GL_FLOAT,
         2 => GL_FLOAT_VEC2,
@@ -7431,6 +7448,46 @@ pub fn uniform1i(location: GLint, v0: GLint) void {
     writeUniform(location, &.{@floatFromInt(v0)});
 }
 
+pub fn uniform2i(location: GLint, x: GLint, y: GLint) void {
+    uniformIv(location, 1, 2, &.{ x, y });
+}
+pub fn uniform3i(location: GLint, x: GLint, y: GLint, z: GLint) void {
+    uniformIv(location, 1, 3, &.{ x, y, z });
+}
+pub fn uniform4i(location: GLint, x: GLint, y: GLint, z: GLint, w: GLint) void {
+    uniformIv(location, 1, 4, &.{ x, y, z, w });
+}
+pub fn uniform1iv(location: GLint, count: GLsizei, value: ?[*]const GLint) void {
+    if (count < 0) return setError(GL_INVALID_VALUE);
+    if (location < 0 or count == 0 or value == null) return;
+    if ((location & SAMPLER_LOCATION_FLAG) != 0) {
+        if (count != 1) return setError(GL_INVALID_OPERATION);
+        return uniform1i(location, value.?[0]);
+    }
+    uniformIv(location, count, 1, value);
+}
+pub fn uniform2iv(location: GLint, count: GLsizei, value: ?[*]const GLint) void {
+    uniformIv(location, count, 2, value);
+}
+pub fn uniform3iv(location: GLint, count: GLsizei, value: ?[*]const GLint) void {
+    uniformIv(location, count, 3, value);
+}
+pub fn uniform4iv(location: GLint, count: GLsizei, value: ?[*]const GLint) void {
+    uniformIv(location, count, 4, value);
+}
+
+fn uniformIv(location: GLint, count: GLsizei, comps: usize, value: ?[*]const GLint) void {
+    if (count < 0) return setError(GL_INVALID_VALUE);
+    if (location < 0 or count == 0 or value == null) return;
+    // Default-block scalars use float storage in the compiler's HAL ABI.
+    const total = @as(usize, @intCast(count)) * comps;
+    var small: [16]f32 = undefined;
+    const floats = if (total <= small.len) small[0..total] else gpa.alloc(f32, total) catch return setError(GL_OUT_OF_MEMORY);
+    defer if (total > small.len) gpa.free(floats);
+    for (floats, value.?[0..total]) |*dst, src| dst.* = @floatFromInt(src);
+    writeUniform(location, floats);
+}
+
 fn uniformFv(location: GLint, count: GLsizei, comps: usize, value: ?[*]const GLfloat) void {
     if (count < 0 or value == null) {
         if (count < 0) setError(GL_INVALID_VALUE);
@@ -7582,7 +7639,10 @@ const DrawLayout = struct {
 /// dest as its zeroed default.
 fn fetchAttrib(emap: []u8, dst_off: usize, s: DrawSource, so: usize) void {
     if (s.gl_type == GL_FLOAT) {
-        if (so + s.comp_bytes <= s.src.len) @memcpy(emap[dst_off .. dst_off + s.comp_bytes], s.src[so .. so + s.comp_bytes]);
+        if (so <= s.src.len and s.comp_bytes <= s.src.len - so) switch (s.comp_bytes) {
+            inline 4, 8, 12, 16 => |n| @memcpy(emap[dst_off..][0..n], s.src[so..][0..n]),
+            else => @memcpy(emap[dst_off .. dst_off + s.comp_bytes], s.src[so .. so + s.comp_bytes]),
+        };
         return;
     }
     const tsz = attribTypeSize(s.gl_type);
@@ -7594,6 +7654,34 @@ fn fetchAttrib(emap: []u8, dst_off: usize, s: DrawSource, so: usize) void {
     }
 }
 
+/// Dispatch the source format once per attribute, rather than once per vertex.
+fn gatherAttribute(dst: []u8, indices: []const u32, stride: usize, dst_offset: usize, s: DrawSource) void {
+    if (s.gl_type == GL_FLOAT) switch (s.comp_bytes) {
+        inline 4, 8, 12, 16 => |n| {
+            for (indices, 0..) |vi, out_i| {
+                const so = @as(usize, vi) * s.src_stride + s.src_offset;
+                if (so <= s.src.len and n <= s.src.len - so)
+                    @memcpy(dst[out_i * stride + dst_offset ..][0..n], s.src[so..][0..n]);
+            }
+            return;
+        },
+        else => {},
+    };
+    if (s.gl_type == GL_UNSIGNED_BYTE and s.normalized and s.size == 4) {
+        for (indices, 0..) |vi, out_i| {
+            const so = @as(usize, vi) * s.src_stride + s.src_offset;
+            if (so > s.src.len or 4 > s.src.len - so) continue;
+            const bytes = std.mem.bytesToValue(@Vector(4, u8), s.src[so..][0..4]);
+            const values: @Vector(4, f32) = @floatFromInt(bytes);
+            const normalized = values * @as(@Vector(4, f32), @splat(1.0 / 255.0));
+            @memcpy(dst[out_i * stride + dst_offset ..][0..16], std.mem.asBytes(&normalized));
+        }
+        return;
+    }
+    for (indices, 0..) |vi, out_i|
+        fetchAttrib(dst, out_i * stride + dst_offset, s, @as(usize, vi) * s.src_stride + s.src_offset);
+}
+
 /// Collect the enabled vertex-attribute arrays into per-attribute source descriptors. Each
 /// attribute may read from its OWN bound array buffer (separate VBOs), the common
 /// non-interleaved layout glmark2's Mesh uses. The interleaved single-VBO layout es2gears
@@ -7601,14 +7689,33 @@ fn fetchAttrib(emap: []u8, dst_off: usize, s: DrawSource, so: usize) void {
 fn resolveDrawLayout(max_vi: u32) ?DrawLayout {
     var sources: [MAX_ATTRIBS]DrawSource = undefined;
     var n_attrs: usize = 0;
+    const program = findProgram(current_program);
     for (attribs, 0..) |a, loc| {
+        // GL array indices follow glBindAttribLocation, while the compiled
+        // shader still uses declaration-order locations. Resolve by name so
+        // engines with fixed attribute slots (including Luanti) read the right
+        // arrays. Enabled arrays unused by the shader must not alias its inputs.
+        const shader_loc: u32 = if (program) |p| blk: {
+            if (p.attributes.items.len == 0) break :blk @intCast(loc);
+            for (p.attributes.items) |attr| {
+                var api_loc = attr.location;
+                for (p.attrib_bindings.items) |binding| {
+                    if (std.mem.eql(u8, binding.name, attr.name)) {
+                        api_loc = binding.location;
+                        break;
+                    }
+                }
+                if (api_loc == loc) break :blk attr.location;
+            }
+            continue;
+        } else @intCast(loc);
         if (!a.enabled) {
             // A DISABLED array with a glVertexAttrib*f generic value: feed that constant to EVERY
             // vertex (a zero-stride source pointing at the stored 4 floats). A disabled attribute
             // with no generic set is left out (the VS reads it as the pipeline's default).
             if (a.has_generic) {
                 sources[n_attrs] = .{
-                    .location = @intCast(loc),
+                    .location = shader_loc,
                     .src = std.mem.asBytes(&attribs[loc].generic),
                     .src_stride = 0, // constant across vertices
                     .src_offset = 0,
@@ -7657,7 +7764,7 @@ fn resolveDrawLayout(max_vi: u32) ?DrawLayout {
             src_offset = 0;
         }
         sources[n_attrs] = .{
-            .location = @intCast(loc),
+            .location = shader_loc,
             .src = src,
             .src_stride = src_stride,
             .src_offset = src_offset,
@@ -7777,6 +7884,48 @@ fn wantBlendState() prism.hal.BlendState {
 
 /// Whether the program's pipeline must be rebuilt because the live depth/cull/blend state
 /// changed since it was baked (the fixed-function state lives outside the program).
+const PipelineVariant = struct {
+    pipeline: *prism.hal.Pipeline,
+    desc: prism.hal.PipelineDesc,
+};
+
+fn pipelineDescriptionsMatch(a: prism.hal.PipelineDesc, b: prism.hal.PipelineDesc) bool {
+    inline for (@typeInfo(prism.hal.PipelineDesc).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "vertex_layout")) {
+            if (a.vertex_layout.stride != b.vertex_layout.stride or
+                a.vertex_layout.attributes.len != b.vertex_layout.attributes.len) return false;
+            for (a.vertex_layout.attributes, b.vertex_layout.attributes) |left, right|
+                if (!std.meta.eql(left, right)) return false;
+        } else if (!std.meta.eql(@field(a, name), @field(b, name))) return false;
+    }
+    return true;
+}
+
+/// Keep pipelines alive across state changes so queued draws can share a submit.
+/// Bound the cache for applications that animate pipeline state continuously.
+fn cachedPipeline(p: *Program, ctx: *state.Context, desc: prism.hal.PipelineDesc) prism.Error!*prism.hal.Pipeline {
+    for (p.pipeline_variants.items) |variant|
+        if (pipelineDescriptionsMatch(variant.desc, desc)) return variant.pipeline;
+
+    const dev = ctx.device();
+    const attributes = try gpa.dupe(prism.hal.VertexAttribute, desc.vertex_layout.attributes);
+    errdefer gpa.free(attributes);
+    const pipeline = try dev.createPipeline(desc);
+    errdefer dev.destroyPipeline(pipeline);
+    if (p.pipeline_variants.items.len == 64) {
+        try ctx.flushDraws();
+        const old = p.pipeline_variants.orderedRemove(0);
+        if (p.hal_pipeline == old.pipeline) p.hal_pipeline = null;
+        if (p.hal_pipeline_noflip == old.pipeline) p.hal_pipeline_noflip = null;
+        dev.destroyPipeline(old.pipeline);
+        gpa.free(old.desc.vertex_layout.attributes);
+    }
+    var owned_desc = desc;
+    owned_desc.vertex_layout.attributes = attributes;
+    try p.pipeline_variants.append(gpa, .{ .pipeline = pipeline, .desc = owned_desc });
+    return pipeline;
+}
+
 fn pipelineStateMatches(p: *Program, flip: bool) bool {
     const want_depth = wantDepthState();
     const want_cull = wantCullState(flip);
@@ -7909,7 +8058,13 @@ fn resolveRenderTargets(dev: prism.hal.Device, surf: *state.Surface, want_depth:
         // driver anti-aliases against its sample count), else the plain backbuffer. color_w/h
         // stay the LOGICAL size. swapBuffers resolves the MS target into the presented image.
         var rt: RenderTargets = .{ .color = surf.renderTarget(), .color_w = surf.width, .color_h = surf.height };
-        if (want_depth) rt.depth = surf.depthAttachment() catch null;
+        // Keep an allocated attachment bound across depth-test changes. Testing
+        // and writes are controlled by each pipeline; detaching it needlessly
+        // splits render batches and forces attachment loads on tiled GPUs.
+        rt.depth = if (want_depth or pending_depth_clear)
+            surf.depthAttachment() catch null
+        else
+            surf.depth_buffer;
         return rt;
     }
     const f = findFramebuffer(bound_framebuffer) orelse {
@@ -8225,8 +8380,10 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
     }
     // The highest vertex index this draw gathers - bounds the client-array CPU range.
     var max_vi: u32 = 0;
+    var min_vi: u32 = std.math.maxInt(u32);
     for (indices) |vi| {
         if (vi > max_vi) max_vi = vi;
+        min_vi = @min(min_vi, vi);
     }
     const layout = resolveDrawLayout(max_vi) orelse {
         obj_lock.unlock();
@@ -8262,12 +8419,66 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
     };
     const emap = pooled_vb.map;
     const expanded = pooled_vb.res;
-    @memset(emap[0..exp_size], 0);
-    for (indices, 0..) |vi, out_i| {
-        const doff = out_i * stride;
-        for (layout.sources[0..layout.n_attrs], 0..) |s, i| {
-            fetchAttrib(emap, doff + dst_attrs[i].offset, s, @as(usize, vi) * s.src_stride + s.src_offset);
+    var source_keys: [MAX_ATTRIBS][11]u64 = undefined;
+    var source_bytes: [MAX_ATTRIBS][]const u8 = undefined;
+    var source_count: usize = 0;
+    for (layout.sources[0..layout.n_attrs], 0..) |s, i| {
+        // Address and buffer offset do not affect conversion when the exact
+        // referenced bytes and indices match, even across client allocations.
+        const end = @as(usize, max_vi) * s.src_stride + s.src_offset + s.src_comp_bytes;
+        const start = @as(usize, min_vi) * s.src_stride + s.src_offset;
+        const bytes = s.src[@min(s.src.len, start)..@min(s.src.len, end)];
+        const lo = @intFromPtr(bytes.ptr);
+        const hi = lo + bytes.len;
+        var group = source_count;
+        var relative: usize = 0;
+        for (source_bytes[0..source_count], 0..) |saved, j| {
+            const old_lo = @intFromPtr(saved.ptr);
+            const old_hi = old_lo + saved.len;
+            if (lo < old_hi and old_lo < hi) {
+                // Interleaved attributes reference overlapping spans of one
+                // allocation. Snapshot their union once; retain each attribute's
+                // relative position so a different layout cannot falsely match.
+                const merged_lo = @min(lo, old_lo);
+                const merged_hi = @max(hi, old_hi);
+                for (source_keys[0..i]) |*key| {
+                    if (key[9] == j) key[10] += old_lo - merged_lo;
+                }
+                source_bytes[j] = @as([*]const u8, @ptrFromInt(merged_lo))[0 .. merged_hi - merged_lo];
+                group = j;
+                relative = lo - merged_lo;
+                break;
+            }
         }
+        if (group == source_count) {
+            source_bytes[source_count] = bytes;
+            source_count += 1;
+        }
+        source_keys[i] = .{ s.src_stride, s.comp_bytes, @backingInt(s.format), s.divisor, s.gl_type, @intFromBool(s.normalized), s.size, s.src_comp_bytes, s.location, group, relative };
+    }
+    const cache_key = std.mem.sliceAsBytes(source_keys[0..layout.n_attrs]);
+    const cache_sources = source_bytes[0..source_count];
+    if (ctx.vertex_cache.find(cache_key, indices, cache_sources)) |cached| {
+        if (pooled_vb.cache_id != cached.id) @memcpy(emap[0..exp_size], cached.bytes);
+        pooled_vb.cache_id = cached.id;
+    } else {
+        ctx.vertex_staging.resize(gpa, exp_size) catch {
+            obj_lock.unlock();
+            setError(GL_OUT_OF_MEMORY);
+            return;
+        };
+        const gathered = ctx.vertex_staging.items;
+        @memset(gathered, 0);
+        for (layout.sources[0..layout.n_attrs], 0..) |s, i|
+            gatherAttribute(gathered, indices, stride, dst_attrs[i].offset, s);
+        @memcpy(emap[0..exp_size], gathered);
+        // A cache allocation failure must not fail an otherwise valid draw.
+        pooled_vb.cache_id = ctx.vertex_cache.remember(cache_key, indices, cache_sources, gathered) catch 0;
+    }
+    // Instance emulation below overwrites divisor attributes in this buffer.
+    // Its contents then cease to be the immutable cached vertex expansion.
+    for (layout.sources[0..layout.n_attrs]) |s| {
+        if (s.divisor != 0) pooled_vb.cache_id = 0;
     }
 
     // The GL-origin y-flip is correct only for the default framebuffer (presented top-down).
@@ -8275,24 +8486,13 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
     // is upright and not wrongly culled. Pick the matching VS + pipeline slot.
     const flip = bound_framebuffer == 0;
     const vs_mod = if (flip) p.hal_vs.? else p.hal_vs_noflip.?;
-    const cur_pipe = if (flip) p.hal_pipeline else p.hal_pipeline_noflip;
-    if (cur_pipe == null or !pipelineStateMatches(p, flip)) {
-        if (cur_pipe) |old| {
-            // A batched draw may still reference this cached pipeline. Submit the batch before the
-            // state change frees + rebuilds it (else the deferred draw dereferences a freed pipeline).
-            ctx.flushDraws() catch {};
-            // Null the slot BEFORE freeing: if the createPipeline below FAILS (e.g. a shader that
-            // overflows the register budget) it returns early, so the slot must not be left pointing
-            // at the freed pipeline - the next draw would re-enter here and double-free it (crash).
-            if (flip) p.hal_pipeline = null else p.hal_pipeline_noflip = null;
-            dev.destroyPipeline(old);
-        }
+    {
         const want_depth = wantDepthState();
         const want_cull = wantCullState(flip);
         const want_blend = wantBlendState();
         const want_stencil = wantStencilState();
         const want_stencil_back = wantStencilBack();
-        const pipe = dev.createPipeline(.{
+        const pipe = cachedPipeline(p, ctx, .{
             .vertex = vs_mod,
             .fragment = p.hal_fs.?,
             .vertex_layout = .{ .stride = stride, .attributes = dst_attrs[0..layout.n_attrs] },
@@ -8308,7 +8508,18 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
             .sample_coverage = fixed.sample_coverage,
             .sample_coverage_value = fixed.sample_coverage_value,
             .sample_coverage_invert = fixed.sample_coverage_invert,
-        }) catch {
+        }) catch |err| {
+            if (debugEnabled() and pipeline_diagnostics < pipeline_diagnostic_programs.len and
+                std.mem.indexOfScalar(GLuint, pipeline_diagnostic_programs[0..pipeline_diagnostics], current_program) == null)
+            {
+                pipeline_diagnostic_programs[pipeline_diagnostics] = current_program;
+                pipeline_diagnostics += 1;
+                std.debug.print("[prism-gles] pipeline FAIL device={s} program={d} err={s} stride={d} topology={s} line_width={d} format={s} attrs={any} depth={any} cull={any} blend={any}\n", .{
+                    dev.caps().device_name,  current_program, @errorName(err),                stride,
+                    @tagName(draw_topology), line_width,      @tagName(currentColorFormat()), dst_attrs[0..layout.n_attrs],
+                    want_depth,              want_cull,       want_blend,
+                });
+            }
             obj_lock.unlock();
             setError(GL_INVALID_OPERATION);
             return;
@@ -8378,9 +8589,20 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
             bound_texture_2darray[@intCast(sm.unit)]
         else
             bound_texture_2d[@intCast(sm.unit)];
-        if (tex_id == 0) continue;
-        const tex = findTexture(tex_id) orelse continue;
-        if (tex.width == 0 or tex.height == 0) continue;
+        const found = if (tex_id == 0) null else findTexture(tex_id);
+        if (found == null or found.?.width == 0 or found.?.height == 0) {
+            if (!sm.cube and !sm.tex3d and !sm.tex2darray) {
+                const image = ctx.incompleteTexture2D() catch {
+                    obj_lock.unlock();
+                    setError(GL_INVALID_OPERATION);
+                    return;
+                };
+                tex_bindings[tex_count] = .{ .binding = sm.binding, .image = image, .filter = .nearest, .min_filter = .nearest };
+                tex_count += 1;
+            }
+            continue;
+        }
+        const tex = found.?;
         // A GL_OES_depth_texture sampled after a depth render pass: rebuild its RGBA8 bytes
         // (R=G=B=depth) from the rendered f32 depths so texture2D(...).x reads the depth.
         if (tex.is_depth and tex.depth_dirty) finalizeDepthTexture(dev, tex);
@@ -8454,17 +8676,13 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
     const depth_tex_to_finalize = rt.depth_tex;
     obj_lock.unlock();
 
-    // The depth attachment + its clear: bind only when depth testing is on. A pending
-    // glClear(GL_DEPTH_BUFFER_BIT) clears it this draw (the software depth path clears via
-    // setDepthTarget). Subsequent draws in the frame keep the accumulated depth.
-    var depth_res: ?*prism.hal.Resource = null;
+    // A bound depth attachment can remain in the pass while testing is disabled.
+    // Clear it on the next draw, then retain it across changes in pipeline state.
+    const depth_res = rt.depth;
     var depth_clear: ?f32 = null;
-    if (fixed.depth_test) {
-        depth_res = rt.depth;
-        if (depth_res != null and pending_depth_clear) {
-            depth_clear = fixed.depth_clear;
-            pending_depth_clear = false;
-        }
+    if (depth_res != null and pending_depth_clear) {
+        depth_clear = fixed.depth_clear;
+        pending_depth_clear = false;
     }
 
     // The stencil attachment + its clear: the default framebuffer's surface stencil buffer, or a
@@ -8521,6 +8739,7 @@ fn drawTriangleListInstanced(indices: []const u32, instance_count: u32) void {
                 };
                 inst_res = pv.res;
                 inst_map = pv.map;
+                pv.cache_id = 0;
                 // Copy the base vertex data only when a different buffer was returned (batched).
                 // Non-batched, checkout returns the same pool slot as `expanded`, so inst_map IS emap
                 // and a memcpy would self-alias (Zig @memcpy panics). The base data is already there.
@@ -8696,12 +8915,8 @@ fn buildArrayIndices(mode: GLenum, first: u32, count: u32, out: *std.ArrayListUn
     out.clearRetainingCapacity();
     switch (mode) {
         GL_TRIANGLES => {
-            var i: u32 = 0;
-            while (i + 3 <= count) : (i += 3) {
-                out.append(gpa, first + i) catch return null;
-                out.append(gpa, first + i + 1) catch return null;
-                out.append(gpa, first + i + 2) catch return null;
-            }
+            out.resize(gpa, count - count % 3) catch return null;
+            for (out.items, 0..) |*v, i| v.* = first + @as(u32, @intCast(i));
         },
         GL_LINES => {
             var i: u32 = 0;
@@ -8839,11 +9054,43 @@ pub fn drawElementsInstanced(mode: GLenum, count: GLsizei, index_type: GLenum, o
         setError(GL_INVALID_OPERATION); // no element-array buffer bound
         return;
     };
+    const ucount: usize = @intCast(count);
+    const bytes = ib.bytes.items;
+    if (offset > bytes.len or ucount > (bytes.len - offset) / elem_size) {
+        obj_lock.unlock();
+        setError(GL_INVALID_OPERATION);
+        return;
+    }
+    // Triangle lists already have the final topology. Decode straight into the
+    // retained output, avoiding a temporary allocation and two append passes.
+    if (mode == GL_TRIANGLES) {
+        const n = ucount - ucount % 3;
+        draw_indices.resize(gpa, n) catch {
+            obj_lock.unlock();
+            setError(GL_OUT_OF_MEMORY);
+            return;
+        };
+        const output = draw_indices.items;
+        switch (elem_size) {
+            inline 1, 2, 4 => |width| for (output, 0..) |*v, j| {
+                const T = switch (width) {
+                    1 => u8,
+                    2 => u16,
+                    4 => u32,
+                    else => unreachable,
+                };
+                v.* = std.mem.bytesToValue(T, bytes[offset + j * width ..][0..width]);
+            },
+            else => unreachable,
+        }
+        obj_lock.unlock();
+        draw_topology = .triangle_list;
+        drawTriangleListInstanced(output, @intCast(instancecount));
+        return;
+    }
     // Read the raw indices out of the bound element buffer at `offset`.
     var raw: std.ArrayListUnmanaged(u32) = .empty;
     defer raw.deinit(gpa);
-    const ucount: usize = @intCast(count);
-    const bytes = ib.bytes.items;
     var i: usize = 0;
     var ok = true;
     while (i < ucount) : (i += 1) {
@@ -9261,4 +9508,116 @@ test "a failed glLinkProgram populates glGetProgramInfoLog (the reason reaches t
     getProgramInfoLog(prog, buf.len, &written, &buf);
     try std.testing.expect(written > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(written)], "vertex shader") != null);
+}
+
+test "native Mali GLES keeps an unbound optional texture from rejecting a draw" {
+    const egl_api = @import("egl.zig");
+    const driver = prism.drivers.select("mali", std.testing.io) orelse return error.SkipZigTest;
+    const dev = driver.createDevice(std.testing.allocator, std.testing.io) catch return error.SkipZigTest;
+    defer dev.deinit();
+    var display = state.Display{ .platform = egl_api.EGL_PLATFORM_SURFACELESS_MESA, .native = null, .initialized = true, .device = dev };
+    const ctx = try state.createContext(&display, 0, egl_api.EGL_OPENGL_ES_API);
+    defer ctx.deinit();
+    const surface = try state.createPbufferSurface(&display, 0, 32, 32);
+    defer surface.deinit();
+    state.makeCurrent(ctx, surface, surface);
+    defer state.makeCurrent(null, null, null);
+    bindFramebuffer(GL_FRAMEBUFFER, 0);
+    disable(GL_DEPTH_TEST);
+    disable(GL_CULL_FACE);
+    disable(GL_BLEND);
+    disable(GL_SCISSOR_TEST);
+    setViewport(0, 0, 32, 32);
+    _ = getError();
+    const vs = createShader(GL_VERTEX_SHADER);
+    defer deleteShader(vs);
+    const vs_source: [*:0]const u8 = "attribute vec2 position; varying vec2 uv; void main() { gl_Position = vec4(position, 0.0, 1.0); uv = position * 0.5 + 0.5; }";
+    shaderSource(vs, 1, &.{vs_source}, null);
+    compileShader(vs);
+    var status: GLint = 0;
+    getShaderiv(vs, GL_COMPILE_STATUS, &status);
+    try std.testing.expectEqual(@as(GLint, 1), status);
+    const fs = createShader(GL_FRAGMENT_SHADER);
+    defer deleteShader(fs);
+    const fs_source: [*:0]const u8 = "precision mediump float; uniform sampler2D baseTexture; uniform sampler2D overlay; uniform float enabled; varying vec2 uv; void main() { vec4 color = texture2D(baseTexture, uv); if (enabled > 0.0) color *= texture2D(overlay, uv); gl_FragColor = color; }";
+    shaderSource(fs, 1, &.{fs_source}, null);
+    compileShader(fs);
+    getShaderiv(fs, GL_COMPILE_STATUS, &status);
+    try std.testing.expectEqual(@as(GLint, 1), status);
+    const program = createProgram();
+    defer deleteProgram(program);
+    attachShader(program, vs);
+    attachShader(program, fs);
+    bindAttribLocation(program, 0, "position");
+    linkProgram(program);
+    getProgramiv(program, GL_LINK_STATUS, &status);
+    try std.testing.expectEqual(@as(GLint, 1), status);
+    useProgram(program);
+    defer useProgram(0);
+    uniform1i(getUniformLocation(program, "baseTexture"), 0);
+    uniform1i(getUniformLocation(program, "overlay"), 1);
+    var texture: GLuint = 0;
+    genTextures(1, @ptrCast(&texture));
+    defer deleteTextures(1, @ptrCast(&texture));
+    activeTexture(GL_TEXTURE0);
+    bindTexture(GL_TEXTURE_2D, texture);
+    texImage2D(GL_TEXTURE_2D, 0, @intCast(GL_RGBA), 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &[_]u8{ 128, 64, 255, 255 });
+    activeTexture(GL_TEXTURE0 + 1);
+    bindTexture(GL_TEXTURE_2D, 0);
+    activeTexture(GL_TEXTURE0);
+    var vbo: GLuint = 0;
+    genBuffers(1, @ptrCast(&vbo));
+    defer deleteBuffers(1, @ptrCast(&vbo));
+    bindBuffer(GL_ARRAY_BUFFER, vbo);
+    const vertices = [_]f32{ -1, -1, 3, -1, -1, 3 };
+    bufferData(GL_ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, GL_STATIC_DRAW);
+    vertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, 0);
+    enableVertexAttribArray(0);
+    defer disableVertexAttribArray(0);
+    blendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for ([_]f32{ 0, 1, 0 }) |enabled| {
+        if (enabled == 0) disable(GL_BLEND) else enable(GL_BLEND);
+        uniform1f(getUniformLocation(program, "enabled"), enabled);
+        clearColor(0, 0, 1, 1);
+        clear(GL_COLOR_BUFFER_BIT);
+        drawArrays(GL_TRIANGLES, 0, 3);
+        var pixel: [4]u8 = undefined;
+        readPixels(16, 16, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixel);
+        try std.testing.expectEqual(GL_NO_ERROR, getError());
+        try std.testing.expectEqualSlices(u8, if (enabled == 0) &.{ 128, 64, 255, 255 } else &.{ 0, 0, 0, 255 }, &pixel);
+    }
+    const cached = findProgram(program).?;
+    try std.testing.expectEqual(@as(usize, 2), cached.pipeline_variants.items.len);
+    try std.testing.expectEqual(cached.pipeline_variants.items[0].pipeline, cached.hal_pipeline.?);
+
+    // Alternating state must leave every queued pipeline alive. Three draws
+    // share one batch and retain their own uniforms, scissor, and pipeline.
+    clearColor(1, 0, 0, 1);
+    clearDepthf(1);
+    depthFunc(GL_LESS);
+    depthMask(GL_TRUE);
+    clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    try std.testing.expect(ctx.batch_cb != null);
+    try std.testing.expectEqual(@as(u32, 0), ctx.batch_draws);
+    try std.testing.expectEqual(@as(usize, 0), ctx.vb_used);
+    enable(GL_SCISSOR_TEST);
+    defer disable(GL_SCISSOR_TEST);
+    defer disable(GL_BLEND);
+    defer disable(GL_DEPTH_TEST);
+    for ([_]f32{ 0, 1, 0 }, 0..) |enabled, column| {
+        if (enabled == 0) disable(GL_BLEND) else enable(GL_BLEND);
+        if (column == 1) enable(GL_DEPTH_TEST) else disable(GL_DEPTH_TEST);
+        if (column == 1) clear(GL_DEPTH_BUFFER_BIT);
+        uniform1f(getUniformLocation(program, "enabled"), enabled);
+        setScissorBox(@intCast(column * 10), 0, 10, 32);
+        drawArrays(GL_TRIANGLES, 0, 3);
+    }
+    try std.testing.expectEqual(@as(u32, 3), ctx.batch_draws);
+    for (0..3) |column| {
+        var pixel: [4]u8 = undefined;
+        readPixels(@intCast(column * 10 + 5), 16, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixel);
+        try std.testing.expectEqualSlices(u8, if (column == 1) &.{ 0, 0, 0, 255 } else &.{ 128, 64, 255, 255 }, &pixel);
+    }
+    try std.testing.expectEqual(GL_NO_ERROR, getError());
+    try std.testing.expectEqual(@as(usize, 3), cached.pipeline_variants.items.len);
 }

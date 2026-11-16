@@ -1184,6 +1184,27 @@ pub fn glUniform4f(location: gles.GLint, v0: gles.GLfloat, v1: gles.GLfloat, v2:
 pub fn glUniform1i(location: gles.GLint, v0: gles.GLint) callconv(.c) void {
     gles.uniform1i(location, v0);
 }
+pub fn glUniform2i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint) callconv(.c) void {
+    gles.uniform2i(location, v0, v1);
+}
+pub fn glUniform3i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint, v2: gles.GLint) callconv(.c) void {
+    gles.uniform3i(location, v0, v1, v2);
+}
+pub fn glUniform4i(location: gles.GLint, v0: gles.GLint, v1: gles.GLint, v2: gles.GLint, v3: gles.GLint) callconv(.c) void {
+    gles.uniform4i(location, v0, v1, v2, v3);
+}
+pub fn glUniform1iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    gles.uniform1iv(location, count, value);
+}
+pub fn glUniform2iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    gles.uniform2iv(location, count, value);
+}
+pub fn glUniform3iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    gles.uniform3iv(location, count, value);
+}
+pub fn glUniform4iv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLint) callconv(.c) void {
+    gles.uniform4iv(location, count, value);
+}
 pub fn glUniform1fv(location: gles.GLint, count: gles.GLsizei, value: ?[*]const gles.GLfloat) callconv(.c) void {
     gles.uniform1fv(location, count, value);
 }
@@ -1629,6 +1650,13 @@ pub fn lookupProc(name: []const u8) egl.ProcFn {
         .{ "glUniform3f", asProc(glUniform3f) },
         .{ "glUniform4f", asProc(glUniform4f) },
         .{ "glUniform1i", asProc(glUniform1i) },
+        .{ "glUniform2i", asProc(glUniform2i) },
+        .{ "glUniform3i", asProc(glUniform3i) },
+        .{ "glUniform4i", asProc(glUniform4i) },
+        .{ "glUniform1iv", asProc(glUniform1iv) },
+        .{ "glUniform2iv", asProc(glUniform2iv) },
+        .{ "glUniform3iv", asProc(glUniform3iv) },
+        .{ "glUniform4iv", asProc(glUniform4iv) },
         .{ "glUniform1fv", asProc(glUniform1fv) },
         .{ "glUniform2fv", asProc(glUniform2fv) },
         .{ "glUniform3fv", asProc(glUniform3fv) },
@@ -9042,7 +9070,7 @@ test "GLES + EGL render entry points all resolve via getProcAddress" {
     }
 }
 
-test "glDrawElements indexed draw renders the same quad as two GL_TRIANGLES" {
+test "glDrawElements indexed geometry cache observes vertex and index changes" {
     _ = eglBindAPI(egl.EGL_OPENGL_ES_API);
     const dpy = eglGetPlatformDisplay(egl.EGL_PLATFORM_SURFACELESS_MESA, @ptrFromInt(0xE63E9), null);
     try std.testing.expectEqual(egl.EGL_TRUE, eglInitialize(dpy, null, null));
@@ -9056,9 +9084,10 @@ test "glDrawElements indexed draw renders the same quad as two GL_TRIANGLES" {
 
     const vs_src: [*:0]const gles.GLchar =
         \\attribute vec3 position;
+        \\attribute vec2 shift;
         \\uniform vec4 uColor;
         \\varying vec4 vColor;
-        \\void main() { gl_Position = vec4(position, 1.0); vColor = uColor; }
+        \\void main() { gl_Position = vec4(position.xy + shift, position.z, 1.0); vColor = uColor; }
     ;
     const fs_src: [*:0]const gles.GLchar =
         \\precision mediump float;
@@ -9075,19 +9104,25 @@ test "glDrawElements indexed draw renders the same quad as two GL_TRIANGLES" {
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
     glBindAttribLocation(prog, 0, "position");
+    glBindAttribLocation(prog, 1, "shift");
     glLinkProgram(prog);
     glUseProgram(prog);
     const col_loc = glGetUniformLocation(prog, "uColor");
     glUniform4f(col_loc, 0.2, 0.9, 0.4, 1);
 
-    const Vtx = extern struct { x: f32, y: f32, z: f32 };
-    const quad = [4]Vtx{
+    const Vtx = extern struct { x: f32, y: f32, z: f32, sx: f32 = 0, sy: f32 = 0 };
+    var quad = [4]Vtx{
         .{ .x = -0.8, .y = -0.8, .z = 0 },
         .{ .x = 0.8, .y = -0.8, .z = 0 },
         .{ .x = 0.8, .y = 0.8, .z = 0 },
         .{ .x = -0.8, .y = 0.8, .z = 0 },
     };
-    const idx = [6]u16{ 0, 1, 2, 0, 2, 3 };
+    const idx = blk: {
+        const pattern = [6]u16{ 0, 1, 2, 0, 2, 3 };
+        var repeated: [288]u16 = undefined;
+        for (&repeated, 0..) |*v, i| v.* = pattern[i % pattern.len];
+        break :blk repeated;
+    };
     var vbo: gles.GLuint = 0;
     var ibo: gles.GLuint = 0;
     glGenBuffers(1, @ptrCast(&vbo));
@@ -9098,11 +9133,16 @@ test "glDrawElements indexed draw renders the same quad as two GL_TRIANGLES" {
     glBufferData(gles.GL_ELEMENT_ARRAY_BUFFER, @sizeOf(@TypeOf(idx)), &idx, gles.GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, gles.GL_FLOAT, gles.GL_FALSE, @sizeOf(Vtx), @ptrFromInt(0));
     glEnableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, gles.GL_FLOAT, gles.GL_FALSE, @sizeOf(Vtx), @ptrFromInt(12));
+    glEnableVertexAttribArray(1);
 
+    // Consecutive full clears may be coalesced before the first draw, but
+    // pixels outside the quad must retain the most recent clear color.
+    glClearColor(1, 0, 0, 1);
+    glClear(gles.GL_COLOR_BUFFER_BIT);
     glClearColor(0, 0, 0, 1);
     glClear(gles.GL_COLOR_BUFFER_BIT);
-    glDrawElements(gles.GL_TRIANGLES, 6, gles.GL_UNSIGNED_SHORT, @ptrFromInt(0));
+    glDrawElements(gles.GL_TRIANGLES, idx.len, gles.GL_UNSIGNED_SHORT, @ptrFromInt(0));
     try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
 
     const s: *state.Surface = @ptrCast(@alignCast(surf.?));
@@ -9115,6 +9155,33 @@ test "glDrawElements indexed draw renders the same quad as two GL_TRIANGLES" {
     try std.testing.expect(px[c + 2] > 70 and px[c + 2] < 140);
     // Corner outside the quad stays clear black.
     try std.testing.expectEqual(@as(u8, 0), px[0]);
+
+    glClear(gles.GL_COLOR_BUFFER_BIT);
+    glDrawElements(gles.GL_TRIANGLES, idx.len, gles.GL_UNSIGNED_SHORT, null);
+    const reused = try flushMap(dev, s);
+    try std.testing.expect(reused[c + 1] > 200);
+    const tracked: *state.Context = @ptrCast(@alignCast(ctx.?));
+    try std.testing.expect(tracked.vertex_cache.hits > 0);
+
+    // Replacing same-size data can retain its CPU allocation. Cached vertex
+    // expansion must observe the changed bytes, not just a matching pointer.
+    // Change only the second interleaved attribute: its overlapping snapshot
+    // was merged with position, but its bytes must still invalidate the hit.
+    for (&quad) |*v| v.sx -= 1;
+    glBufferData(gles.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(quad)), &quad, gles.GL_STATIC_DRAW);
+    glClear(gles.GL_COLOR_BUFFER_BIT);
+    glDrawElements(gles.GL_TRIANGLES, idx.len, gles.GL_UNSIGNED_SHORT, null);
+    const moved = try flushMap(dev, s);
+    try std.testing.expectEqual(@as(u8, 0), moved[c]);
+    const left = (32 * 64 + 12) * 4;
+    try std.testing.expect(moved[left + 1] > 200);
+
+    const degenerate: [idx.len]u16 = @splat(0);
+    glBufferData(gles.GL_ELEMENT_ARRAY_BUFFER, @sizeOf(@TypeOf(degenerate)), &degenerate, gles.GL_STATIC_DRAW);
+    glClear(gles.GL_COLOR_BUFFER_BIT);
+    glDrawElements(gles.GL_TRIANGLES, idx.len, gles.GL_UNSIGNED_SHORT, null);
+    const empty = try flushMap(dev, s);
+    try std.testing.expectEqual(@as(u8, 0), empty[left + 1]);
 
     glDeleteBuffers(1, &[_]gles.GLuint{ vbo, ibo });
     glDeleteProgram(prog);
@@ -11249,6 +11316,14 @@ test "gl_PointCoord: a point sprite's FS reads the 0..1 s/t coord (textured poin
 // the real attribute resolution: `texcoord` resolves to its true location (declaration order
 // after position+normal), the UV reaches the FS, and the texture samples correctly.
 test "glmark2-shaped attributes (position/normal/texcoord) resolve by NAME and texcoord samples" {
+    try runNamedAttributes(false);
+}
+
+test "Luanti fixed attribute slots feed the declared shader inputs" {
+    try runNamedAttributes(true);
+}
+
+fn runNamedAttributes(rebind: bool) !void {
     _ = eglBindAPI(egl.EGL_OPENGL_ES_API);
     const dpy = eglGetPlatformDisplay(egl.EGL_PLATFORM_SURFACELESS_MESA, @ptrFromInt(0x7EC0), null);
     try std.testing.expectEqual(egl.EGL_TRUE, eglInitialize(dpy, null, null));
@@ -11286,7 +11361,11 @@ test "glmark2-shaped attributes (position/normal/texcoord) resolve by NAME and t
     const prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
-    // NO glBindAttribLocation: the app resolves every attribute by name (the glmark2 path).
+    if (rebind) {
+        glBindAttribLocation(prog, 5, "position");
+        glBindAttribLocation(prog, 1, "normal");
+        glBindAttribLocation(prog, 4, "texcoord");
+    }
     glLinkProgram(prog);
     var link_ok: gles.GLint = 0;
     glGetProgramiv(prog, gles.GL_LINK_STATUS, &link_ok);
@@ -11298,6 +11377,10 @@ test "glmark2-shaped attributes (position/normal/texcoord) resolve by NAME and t
     const pos_loc = glGetAttribLocation(prog, "position");
     const nrm_loc = glGetAttribLocation(prog, "normal");
     const uv_loc = glGetAttribLocation(prog, "texcoord");
+    if (rebind) {
+        try std.testing.expectEqual(@as(gles.GLint, 5), pos_loc);
+        try std.testing.expectEqual(@as(gles.GLint, 4), uv_loc);
+    }
     try std.testing.expect(pos_loc >= 0 and nrm_loc >= 0 and uv_loc >= 0);
     try std.testing.expect(pos_loc != uv_loc and nrm_loc != uv_loc and pos_loc != nrm_loc);
     try std.testing.expectEqual(@as(gles.GLint, -1), glGetAttribLocation(prog, "uTex")); // a sampler is not an attribute
@@ -12155,4 +12238,64 @@ test "EGL UBO oracle: a std140 block with padding (float, vec3, vec2) reads each
     _ = eglMakeCurrent(dpy, null, null, egl.EGL_NO_CONTEXT);
     _ = eglDestroySurface(dpy, surf);
     _ = eglDestroyContext(dpy, ctx);
+}
+
+test "Luanti integer uniform setters update values and sampler units" {
+    _ = eglBindAPI(egl.EGL_OPENGL_ES_API);
+    const dpy = eglGetPlatformDisplay(egl.EGL_PLATFORM_SURFACELESS_MESA, @ptrFromInt(0xE61D8), null);
+    try std.testing.expectEqual(egl.EGL_TRUE, eglInitialize(dpy, null, null));
+    defer _ = eglTerminate(dpy);
+    const cfg = state.configHandle(0);
+    const ctx = eglCreateContext(dpy, cfg, egl.EGL_NO_CONTEXT, null);
+    const attrs = [_]EGLint{ egl.EGL_WIDTH, 8, egl.EGL_HEIGHT, 8, egl.EGL_NONE };
+    const surf = eglCreatePbufferSurface(dpy, cfg, &attrs);
+    try std.testing.expectEqual(egl.EGL_TRUE, eglMakeCurrent(dpy, surf, surf, ctx));
+    defer _ = eglDestroyContext(dpy, ctx);
+    defer _ = eglDestroySurface(dpy, surf);
+    defer _ = eglMakeCurrent(dpy, null, null, egl.EGL_NO_CONTEXT);
+    const sources = [_][*:0]const gles.GLchar{
+        "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }",
+        "precision mediump float; uniform int uTextureUsage; uniform sampler2D uTextureUnit; void main() { gl_FragColor = vec4(float(uTextureUsage)); }",
+    };
+    const vs = glCreateShader(gles.GL_VERTEX_SHADER);
+    defer glDeleteShader(vs);
+    const fs = glCreateShader(gles.GL_FRAGMENT_SHADER);
+    defer glDeleteShader(fs);
+    for ([_]gles.GLuint{ vs, fs }, sources) |shader, source| {
+        glShaderSource(shader, 1, &[_]?[*:0]const gles.GLchar{source}, null);
+        glCompileShader(shader);
+        var compiled: gles.GLint = 0;
+        glGetShaderiv(shader, gles.GL_COMPILE_STATUS, &compiled);
+        try std.testing.expectEqual(@as(gles.GLint, 1), compiled);
+    }
+    const prog = glCreateProgram();
+    defer glDeleteProgram(prog);
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    var linked: gles.GLint = 0;
+    glGetProgramiv(prog, gles.GL_LINK_STATUS, &linked);
+    try std.testing.expectEqual(@as(gles.GLint, 1), linked);
+    glUseProgram(prog);
+    var uniform_name: [64]gles.GLchar = undefined;
+    var uniform_type: gles.GLenum = 0;
+    glGetActiveUniform(prog, 0, uniform_name.len, null, null, &uniform_type, &uniform_name);
+    try std.testing.expectEqual(gles.GL_INT, uniform_type);
+    const loc = glGetUniformLocation(prog, "uTextureUsage");
+    try std.testing.expect(loc >= 0);
+    glUniform1iv(loc, 1, &[_]gles.GLint{1});
+    var value: gles.GLfloat = 0;
+    glGetUniformfv(prog, loc, @ptrCast(&value));
+    try std.testing.expectEqual(@as(f32, 1), value);
+    const sampler = glGetUniformLocation(prog, "uTextureUnit");
+    try std.testing.expect(sampler >= 0);
+    glUniform1iv(sampler, 1, &[_]gles.GLint{3});
+    glGetUniformfv(prog, sampler, @ptrCast(&value));
+    try std.testing.expectEqual(@as(f32, 3), value);
+    glUniform1iv(loc, -1, null);
+    try std.testing.expectEqual(gles.GL_INVALID_VALUE, glGetError());
+    glUniform1iv(-1, 1, &[_]gles.GLint{1});
+    try std.testing.expectEqual(gles.GL_NO_ERROR, glGetError());
+    for ([_][*:0]const u8{ "glUniform1iv", "glUniform2iv", "glUniform3iv", "glUniform4iv", "glUniform2i", "glUniform3i", "glUniform4i" }) |entry|
+        try std.testing.expect(lookupProc(std.mem.span(entry)) != null);
 }

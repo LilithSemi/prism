@@ -1,5 +1,5 @@
 //! If-convert acyclic shader control flow. Both sides execute on AGX and joins
-//! select the value from the taken edge. Only output stores may have side effects;
+//! select the value from the taken edge. Output stores and fragment discard carry their execution guards;
 //! memory accesses remain checked by the native compiler's binding validation.
 const std = @import("std");
 const ir = @import("vulcan-ir");
@@ -54,6 +54,15 @@ fn outputSlot(func: *const Function, pointer: Value) ?usize {
     return null;
 }
 
+fn isDiscard(func: *const Function, target: Value) bool {
+    var attrs = func.attributesOf(.{ .value = target });
+    while (attrs.next()) |attr| switch (attr) {
+        .custom => |a| if (std.mem.eql(u8, a.namespace, "vulcan.gpu") and std.mem.eql(u8, a.key, "discard_fn")) return true,
+        else => {},
+    };
+    return false;
+}
+
 pub fn run(func: *Function) Error!void {
     if (func.blockCount() == 1) return;
     if (func.blockCount() > 512) return error.Unsupported;
@@ -106,7 +115,15 @@ pub fn run(func: *Function) Error!void {
                 // Keep the pointer's defining instruction, which carries the
                 // output attribute, in the linear stream too.
             },
-            .call_indirect, .load, .alloca, .iconst, .fconst, .arith, .arith_imm, .icmp, .select, .unary, .convert => try linear.append(gpa, inst),
+            .call_indirect => |call| {
+                if (isDiscard(func, call.target)) {
+                    if (func.valueList(call.args).len != 0) return error.Unsupported;
+                    const args = try func.internValueList(&.{guard});
+                    func.opcodeMut(inst).call_indirect.args = args;
+                }
+                try linear.append(gpa, inst);
+            },
+            .load, .alloca, .iconst, .fconst, .arith, .arith_imm, .icmp, .select, .unary, .convert => try linear.append(gpa, inst),
             else => return error.Unsupported,
         };
         if (!branch) switch (func.terminator(block).?) {

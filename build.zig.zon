@@ -25,8 +25,8 @@
             .hash = "asahi-0.1.0-pewgrkU9BQDAWLlCdh3xp616UHNuyq5b7u6ykk66YGCo",
         },
         .vulcan = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan#d80911380ff98de4b00210cf6e2e9b4593748fe9",
-            .hash = "vulcan-0.0.0-d6EfZChyuwAAosNgSURvMxKAiPxjqo-Kr-tGWsKUDOEQ",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/vulcan#6c2cf71d7f900d356dee9916572906badf0b21c2",
+            .hash = "vulcan-0.0.0-d6EfZLGSzwATr4XoE-23K8kfOqxGY6XYiOdswN5S6pyA",
         },
         .drm = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/drm.zig#2052f9db78f1ceddc7fd378aaf464467adcd3ee8",

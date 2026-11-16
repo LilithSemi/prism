@@ -709,7 +709,7 @@ fn sampleSlice(desc: *const TexDesc, iz: u32, slice_bytes: usize, u: f32, v: f32
 pub const MathOp = enum(i32) { pow = 0, exp = 1, log = 2, exp2 = 3, log2 = 4, sin = 5, cos = 6, _ };
 
 pub fn mathFn(op: i32, a: f32, b: f32) callconv(.c) f32 {
-    return switch (@as(MathOp, @enumFromInt(op))) {
+    return switch (@as(MathOp, @fromBackingInt(@intCast(op)))) {
         .pow => std.math.pow(f32, a, b),
         .exp => @exp(a),
         .log => @log(a),
@@ -723,10 +723,10 @@ pub fn mathFn(op: i32, a: f32, b: f32) callconv(.c) f32 {
 
 test "mathFn computes the transcendentals the JIT dispatches" {
     const eps = 1e-4;
-    try std.testing.expectApproxEqAbs(@as(f32, 8.0), mathFn(@intFromEnum(MathOp.pow), 2.0, 3.0), eps);
-    try std.testing.expectApproxEqAbs(std.math.pow(f32, 0.5, 1.0 / 2.4), mathFn(@intFromEnum(MathOp.pow), 0.5, 1.0 / 2.4), eps);
-    try std.testing.expectApproxEqAbs(@as(f32, 4.0), mathFn(@intFromEnum(MathOp.exp2), 2.0, 0), eps);
-    try std.testing.expectApproxEqAbs(@as(f32, 3.0), mathFn(@intFromEnum(MathOp.log2), 8.0, 0), eps);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), mathFn(@backingInt(MathOp.pow), 2.0, 3.0), eps);
+    try std.testing.expectApproxEqAbs(std.math.pow(f32, 0.5, 1.0 / 2.4), mathFn(@backingInt(MathOp.pow), 0.5, 1.0 / 2.4), eps);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), mathFn(@backingInt(MathOp.exp2), 2.0, 0), eps);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), mathFn(@backingInt(MathOp.log2), 8.0, 0), eps);
 }
 
 test "sampleTextureCube picks the face from the direction (skybox oracle)" {

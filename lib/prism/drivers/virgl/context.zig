@@ -63,7 +63,7 @@ fn pipeBlendFactor(f: hal.BlendFactor) u32 {
 }
 /// HAL BlendOp -> PIPE_BLEND_* (add=0..max=4, a direct ordinal match).
 fn pipeBlendOp(o: hal.BlendOp) u32 {
-    return @intFromEnum(o);
+    return @backingInt(o);
 }
 /// Whether a blend factor references glBlendColor (a CONSTANT_* factor).
 fn blendUsesConstant(f: hal.BlendFactor) bool {
@@ -315,7 +315,7 @@ pub const Context = struct {
                 .format = formats.virglColorFormat(dres.format),
                 .test_enable = pipe.depth.test_enable,
                 .write_enable = pipe.depth.write_enable,
-                .func = @intFromEnum(pipe.depth.compare_op),
+                .func = @backingInt(pipe.depth.compare_op),
                 .clear = c.depth_clear,
             };
         } else null;

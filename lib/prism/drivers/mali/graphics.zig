@@ -1,9 +1,8 @@
 //! Narrow, truthful SPIR-V lowering for the first native Mali graphics path.
 //!
-//! The vertex template is the PanVK-compiled Prism selection probe. We parse
-//! SPIR-V into Vulcan's scalar IR, prove the passthrough-position semantics,
-//! and generate a native immediate fragment program for any constant RGBA
-//! output. Arbitrary modules are never silently substituted.
+//! SPIR-V is parsed into scalar IR. Straight-line position arithmetic and
+//! uniform loads compile to Valhall; proven passthrough and UI semantics can
+//! also use the existing native templates. Unsupported operations are rejected.
 
 const std = @import("std");
 const mali = @import("mali");
@@ -13,19 +12,36 @@ const F = ir.function;
 const Function = F.Function;
 const Value = F.Value;
 const ShaderModule = @import("shader.zig").ShaderModule;
+const native_draw = @import("native_draw.zig");
 
 pub const Pipeline = struct {
     native: mali.NativeGraphicsPipeline,
     stride: u32,
     requires_texture: bool,
+    writes_coverage: bool = false,
+    texture_mask: u8 = 0,
+    blend_mode: native_draw.BlendMode = .replace,
+    cull: hal.CullState = .{},
+    depth: hal.DepthState = .{},
+    attributes: [16]hal.VertexAttribute = undefined,
+    attribute_count: u8 = 0,
+    vertex_uniform_bytes: usize = 0,
+    fragment_uniform_bytes: usize = 0,
+    varying_size: ?u32 = null,
 
     pub fn create(session: *mali.Session, gpa: std.mem.Allocator, desc: hal.PipelineDesc) hal.Error!Pipeline {
         if (!supportedState(desc)) return error.Unsupported;
         const vertex: *ShaderModule = @ptrCast(@alignCast(desc.vertex));
         const fragment: *ShaderModule = @ptrCast(@alignCast(desc.fragment));
         if (vertex.stage != .vertex or fragment.stage != .fragment) return error.InvalidArgument;
-        const vertex_meaning = try validateShader(gpa, vertex.code, .vertex);
-        const fragment_meaning = try validateShader(gpa, fragment.code, .fragment);
+        const fragment_meaning = validateShader(gpa, fragment.code, .fragment) catch |err| {
+            if (err != error.Unsupported) return err;
+            return createProgrammable(session, gpa, desc, vertex.code, fragment.code);
+        };
+        const vertex_meaning = validateShader(gpa, vertex.code, .vertex) catch |err| {
+            if (err != error.Unsupported) return err;
+            return createProgrammable(session, gpa, desc, vertex.code, fragment.code);
+        };
         const native = switch (fragment_meaning) {
             .constant_color => |color_bits| constant: {
                 if (vertex_meaning != .position or !supportedPositionLayout(desc.vertex_layout)) return error.Unsupported;
@@ -58,11 +74,17 @@ pub const Pipeline = struct {
             else => error.InitializationFailed,
         };
         native_pipeline.blend = if (desc.blend.enable) .src_alpha else .replace;
-        return .{
+        var result: Pipeline = .{
             .native = native_pipeline,
             .stride = desc.vertex_layout.stride,
             .requires_texture = native_pipeline.vertex_layout == .textured_color,
+            .blend_mode = if (!desc.blend.enable) .replace else if (desc.blend.src_alpha == .one) .src_alpha else .src_alpha_both,
+            .cull = desc.cull,
+            .depth = desc.depth,
         };
+        result.attribute_count = @intCast(desc.vertex_layout.attributes.len);
+        @memcpy(result.attributes[0..result.attribute_count], desc.vertex_layout.attributes);
+        return result;
     }
 
     pub fn deinit(self: *Pipeline, session: *mali.Session) void {
@@ -71,37 +93,80 @@ pub const Pipeline = struct {
     }
 };
 
+fn createProgrammable(session: *mali.Session, gpa: std.mem.Allocator, desc: hal.PipelineDesc, spirv: []const u8, fragment_spirv: []const u8) hal.Error!Pipeline {
+    if (!inputLayoutFits(desc.vertex_layout, &.{})) return error.Unsupported;
+    const mask = try @import("fragment.zig").inputMask(gpa, spirv, fragment_spirv);
+    const program = try @import("vertex.zig").compileWithMask(gpa, spirv, mask);
+    defer program.deinit(gpa);
+    var supplied: u16 = 0;
+    for (desc.vertex_layout.attributes) |attribute| supplied |= @as(u16, 1) << @as(u4, @intCast(attribute.location));
+    if (supplied & program.attributes != program.attributes) return error.Unsupported;
+    const fragment = try @import("fragment.zig").compile(gpa, spirv, fragment_spirv, program.varying_mask);
+    defer gpa.free(fragment.code);
+    const native_pipeline = @import("native_pipeline.zig");
+    var native = native_pipeline.create(
+        session,
+        .{ .code = program.code, .register_count = 59, .preload = 0x3800 },
+        if (fragment.uses_varyings) .{ .code = program.varying_code orelse return error.Unsupported, .register_count = 59, .preload = 0x3800, .descriptor_flags = 0 } else null,
+        .{ .code = fragment.code, .register_count = 59, .preload = 0x3000 },
+        .position,
+    ) catch |err| return @import("device.zig").merr(err);
+    native.blend = if (desc.blend.enable) .src_alpha else .replace;
+    var pipeline = Pipeline{
+        .native = native,
+        .stride = desc.vertex_layout.stride,
+        .requires_texture = fragment.requires_texture,
+        .writes_coverage = fragment.writes_coverage,
+        .texture_mask = fragment.texture_mask,
+        .blend_mode = if (!desc.blend.enable) .replace else if (desc.blend.src_alpha == .one) .src_alpha else .src_alpha_both,
+        .cull = desc.cull,
+        .depth = desc.depth,
+        .attribute_count = @intCast(desc.vertex_layout.attributes.len),
+        .vertex_uniform_bytes = program.uniform_bytes,
+        .fragment_uniform_bytes = fragment.uniform_bytes,
+        .varying_size = if (fragment.uses_varyings) program.varying_size else 0,
+    };
+    @memcpy(pipeline.attributes[0..pipeline.attribute_count], desc.vertex_layout.attributes);
+    return pipeline;
+}
+
 fn supportedPositionLayout(layout: hal.VertexLayout) bool {
-    return layout.stride == 8 and layout.attributes.len == 1 and
-        layout.attributes[0].location == 0 and layout.attributes[0].format == .r32g32_float and
-        layout.attributes[0].offset == 0;
+    return inputLayoutFits(layout, &.{2});
 }
-
 fn supportedColorLayout(layout: hal.VertexLayout) bool {
-    return layout.stride == 20 and layout.attributes.len == 2 and
-        layout.attributes[0].location == 0 and layout.attributes[0].format == .r32g32_float and
-        layout.attributes[0].offset == 0 and layout.attributes[1].location == 1 and
-        layout.attributes[1].format == .r32g32b32_float and layout.attributes[1].offset == 8;
+    return inputLayoutFits(layout, &.{ 2, 3 });
 }
-
 fn supportedRoundedRectangleLayout(layout: hal.VertexLayout) bool {
-    return layout.stride == 48 and layout.attributes.len == 4 and
-        layout.attributes[0].location == 0 and layout.attributes[0].format == .r32g32_float and layout.attributes[0].offset == 0 and
-        layout.attributes[1].location == 1 and layout.attributes[1].format == .r32g32_float and layout.attributes[1].offset == 8 and
-        layout.attributes[2].location == 2 and layout.attributes[2].format == .r32g32b32a32_float and layout.attributes[2].offset == 16 and
-        layout.attributes[3].location == 3 and layout.attributes[3].format == .r32g32b32a32_float and layout.attributes[3].offset == 32;
+    return inputLayoutFits(layout, &.{ 2, 2, 4, 4 });
+}
+fn supportedTexturedLayout(layout: hal.VertexLayout) bool {
+    return inputLayoutFits(layout, &.{ 2, 2, 4 });
 }
 
-fn supportedTexturedLayout(layout: hal.VertexLayout) bool {
-    return layout.stride == 32 and layout.attributes.len == 3 and
-        layout.attributes[0].location == 0 and layout.attributes[0].format == .r32g32_float and layout.attributes[0].offset == 0 and
-        layout.attributes[1].location == 1 and layout.attributes[1].format == .r32g32_float and layout.attributes[1].offset == 8 and
-        layout.attributes[2].location == 2 and layout.attributes[2].format == .r32g32b32a32_float and layout.attributes[2].offset == 16;
+fn inputLayoutFits(layout: hal.VertexLayout, required: []const u3) bool {
+    if (layout.stride == 0 or layout.stride % 4 != 0 or layout.attributes.len > 16) return false;
+    var locations: u16 = 0;
+    for (layout.attributes) |attribute| {
+        const components = native_draw.floatComponents(attribute.format) orelse return false;
+        if (attribute.location >= 16 or attribute.offset % 4 != 0 or
+            @as(u64, attribute.offset) + @as(u64, components) * 4 > layout.stride) return false;
+        const bit = @as(u16, 1) << @as(u4, @intCast(attribute.location));
+        if (locations & bit != 0) return false;
+        locations |= bit;
+    }
+    for (required, 0..) |components, location| {
+        var found = false;
+        for (layout.attributes) |attribute| {
+            if (attribute.location == location and native_draw.floatComponents(attribute.format).? >= components) found = true;
+        }
+        if (!found) return false;
+    }
+    return true;
 }
 
 fn supportedState(desc: hal.PipelineDesc) bool {
-    return desc.color_format == .rgba8_unorm and desc.topology == .triangle_list and desc.line_width == 1 and
-        std.meta.eql(desc.depth, hal.DepthState{}) and std.meta.eql(desc.cull, hal.CullState{}) and
+    return desc.color_format == .rgba8_unorm and desc.topology == .triangle_list and
+        std.math.isFinite(desc.depth.bias_constant) and std.math.isFinite(desc.depth.bias_slope) and std.math.isFinite(desc.depth.bias_clamp) and
         supportedBlend(desc.blend) and desc.samples == 1 and !desc.alpha_to_coverage and
         !desc.sample_coverage and desc.sample_coverage_value == 1 and !desc.sample_coverage_invert and
         std.meta.eql(desc.stencil, hal.StencilState{}) and desc.stencil_back == null;
@@ -110,7 +175,7 @@ fn supportedState(desc: hal.PipelineDesc) bool {
 fn supportedBlend(blend: hal.BlendState) bool {
     if (!blend.enable) return std.meta.eql(blend, hal.BlendState{});
     return blend.src_color == .src_alpha and blend.dst_color == .one_minus_src_alpha and
-        blend.src_alpha == .one and blend.dst_alpha == .one_minus_src_alpha and
+        (blend.src_alpha == .one or blend.src_alpha == .src_alpha) and blend.dst_alpha == .one_minus_src_alpha and
         blend.color_op == .add and blend.alpha_op == .add and
         std.meta.eql(blend.constant, [4]f32{ 0, 0, 0, 0 }) and
         std.meta.eql(blend.write_mask, [4]bool{ true, true, true, true });
@@ -422,13 +487,20 @@ test "Mali lowering accepts semantic constant-color shaders and rejects vertex s
     try std.testing.expectEqual(ShaderMeaning.image, try validateShader(gpa, image_fragment, .fragment));
 }
 
-test "Mali accepts PhantomUI's premultiplied-alpha destination equation only" {
+test "Mali accepts separate and shared source-alpha blend equations" {
     try std.testing.expect(supportedBlend(.{}));
     try std.testing.expect(supportedBlend(.{
         .enable = true,
         .src_color = .src_alpha,
         .dst_color = .one_minus_src_alpha,
         .src_alpha = .one,
+        .dst_alpha = .one_minus_src_alpha,
+    }));
+    try std.testing.expect(supportedBlend(.{
+        .enable = true,
+        .src_color = .src_alpha,
+        .dst_color = .one_minus_src_alpha,
+        .src_alpha = .src_alpha,
         .dst_alpha = .one_minus_src_alpha,
     }));
     try std.testing.expect(!supportedBlend(.{ .enable = true }));
